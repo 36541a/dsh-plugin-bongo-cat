@@ -1,0 +1,10 @@
+# Root installs only — the .verify/ stub tree is deliberately tracked.
+/node_modules/
+lib/
+.verify/lib/
+.verify/node_modules/*
+# The schemastery stub is test tooling, not an installed dependency: keep it.
+!.verify/node_modules/@deepseek-ai/
+!.verify/node_modules/@deepseek-ai/schemastery/
+*.tmp
+.DS_Store

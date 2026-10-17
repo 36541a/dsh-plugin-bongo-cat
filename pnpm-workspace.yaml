@@ -1,0 +1,5 @@
+# Workspace marker for local development of dsh-plugin-bongo-cat.
+# The plugin itself is a single package; this file keeps pnpm treating
+# the repository root as a workspace root.
+packages:
+  - .

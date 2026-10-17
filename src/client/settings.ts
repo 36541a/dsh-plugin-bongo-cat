@@ -1,0 +1,66 @@
+/**
+ * Shared wall-facing constants and wire types (browser half).
+ *
+ * The settings TYPE comes from the single-source contract
+ * (src/shared/settings-contract.ts) — re-exported here so the rest of the
+ * browser half keeps a single import site. Everything else in this file
+ * is browser-only: dictionary keys and wire envelopes.
+ */
+import type { BongoCatSettings } from '../shared/settings-contract'
+
+export type { BongoCatSettings, BongoCatPosition } from '../shared/settings-contract'
+export { SETTINGS_DEFAULTS } from '../shared/settings-contract'
+
+export const BONGO_CAT_NS = 'bongo-cat'
+
+/** Dictionary keys of the bongo-cat namespace (single source of truth). */
+export type BongoCatKey =
+  | 'nav' | 'hint' | 'hintToast'
+  | 'enabledLabel'
+  | 'skinLabel' | 'builtinLabel' | 'customLabel'
+  | 'importSkinButton' | 'removeSkinButton' | 'framesLabel' | 'framesHint'
+  | 'scanButton' | 'scanning' | 'scanEmpty' | 'scanHint'
+  | 'soundLabel' | 'soundOnLabel' | 'volumeLabel'
+  | 'importSoundButton' | 'removeSoundButton'
+  | 'positionLabel' | 'posBR' | 'posBL' | 'posTL' | 'posTR'
+  | 'offsetLabel' | 'sizeLabel' | 'speedLabel'
+  | 'presetLabel' | 'presetFocus' | 'presetZen' | 'presetParty' | 'presetNight' | 'presetApplied'
+  | 'counterLabel' | 'counterReset'
+  | 'eggsLabel' | 'eggFreak' | 'eggSleep' | 'eggPet' | 'eggNight'
+  | 'loading' | 'unavailable' | 'remoteWarning' | 'tooLarge' | 'busy'
+
+/** Structural mirror of the host RpcResult envelope. */
+export type RpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string; details: Record<string, unknown> } }
+
+/** Cache-busted URL of the imported skin image. */
+export function skinUrl(revision: number): string {
+  return '/plugins/bongo-cat/skin?v=' + revision
+}
+
+/** Cache-busted URL of the imported sound. */
+export function soundUrl(revision: number): string {
+  return '/plugins/bongo-cat/sound?v=' + revision
+}
+
+/** One image found by the host-side Bongo Cat scanner. */
+export interface ScannedFile {
+  name: string
+  path: string
+  size: number
+}
+
+/** One scanned root (game install / Workshop / AppData). */
+export interface ScannedRoot {
+  label: string
+  path: string
+  files: ScannedFile[]
+}
+
+/** Payload of a successful skins/import or sounds/import. */
+export interface ImportResult {
+  revision: number
+  name: string
+  ext: string
+}

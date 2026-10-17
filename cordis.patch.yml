@@ -1,0 +1,8 @@
+# The dsh-plugin-bongo-cat bundle patch: one dual-face row.
+# The package's node half (main) provides the bongo-cat settings
+# namespace, the /bongo-cat RPC channel, and the skin/sound GET routes;
+# its dsh.client declaration adds the browser half (lib/client.js) to
+# the web roster.
+- insert:
+    - id: bongo-cat
+      name: 'dsh-plugin-bongo-cat'
