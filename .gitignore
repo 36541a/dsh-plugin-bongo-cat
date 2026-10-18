@@ -1,6 +1,5 @@
 # Root installs only — the .verify/ stub tree is deliberately tracked.
 /node_modules/
-lib/
 .verify/lib/
 .verify/node_modules/*
 # The schemastery stub is test tooling, not an installed dependency: keep it.
@@ -8,3 +7,8 @@ lib/
 !.verify/node_modules/@deepseek-ai/schemastery/
 *.tmp
 .DS_Store
+
+# lib/ (the built bundles) IS tracked on purpose: installing from a plain
+# GitHub checkout then needs no build step, so pnpm's allowBuilds gate never
+# gets in the way. Rebuild before committing (`pnpm build`); `pnpm verify`
+# fails when lib/ is older than src/.
