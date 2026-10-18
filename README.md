@@ -10,7 +10,7 @@
 
 - **原版美术**：从本机 Steam 安装的 Bongo Cat 中提取原始精灵（身体 / 右爪 / 左右手鼓），按游戏图层与画布坐标合成 idle、左击、右击三帧，画面与原版一致
 - **敲击互动**：键盘敲击 → 猫爪左右交替；鼠标点击 → 双爪齐敲；键盘灯随敲击亮起
-- **内置 SVG 备选**：没装游戏或不想用原版资源时，8 款内置 SVG 皮肤照常可用（经典白、午夜黑、橘猫、云朵灰、暹罗、礼服、三花、樱花）
+- **Steam 皮肤选择器**：把游戏里全部 243 套皮肤做成图标网格，点一下就换装（提取自你本机安装，含节日/联动皮肤）
 - **Steam 皮肤导入**：扫描本机 Bongo Cat 安装目录与创意工坊（app 1337970），把图片导入为自定义皮肤
 - **自定义精灵图皮肤**：导入横向精灵图 PNG（帧数 2–12 可调）
 - **合成音效**：内置 WebAudio 合成的"tok"敲击声，零音频文件；也可导入自己的 `.wav`
@@ -20,7 +20,7 @@
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **趣味彩蛋**：连续快打触发狂暴模式；90 秒不理它开始打瞌睡；单击猫咪触发摸头杀；深夜自动进入犯困配色
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 85 项断言，push/PR 自动跑
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 83 项断言，push/PR 自动跑
 
 ## 安装
 
@@ -85,9 +85,7 @@ dsh-plugin-bongo-cat/
 │   └── client/                   # browser 端
 │       ├── index.tsx             #   入口：注册 settings.section + locale + 挂载猫咪
 │       ├── cat.ts                #   猫咪控制器：输入监听、动画状态、拖拽、计数、暂停
-│       ├── cat-svg.ts            #   SVG 猫模板 + 皮肤预览
 │       ├── cat.module.css          #   动画与装饰开关（CSS Modules）
-│       ├── skins.ts              #   8 款内置皮肤定义
 │       ├── presets.ts            #   心情预置（完整补丁快照）
 │       ├── sound.ts              #   WebAudio 合成音效
 │       ├── store.ts              #   /bongo-cat RPC 配置存储（合写）
@@ -114,7 +112,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 45 项 + browser 40 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 47 项 + browser 36 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```
@@ -127,4 +125,4 @@ pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 
 ## 许可
 
-MIT。Bongo Cat 游戏本体归其作者所有；本插件不包含任何游戏资产，内置猫咪均为原创 SVG 绘制。
+MIT。Bongo Cat 游戏本体与美术资源归其作者所有；本插件不包含任何游戏图像，画面由你本机安装的游戏现场提取。

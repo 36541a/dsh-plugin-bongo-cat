@@ -57,15 +57,8 @@ export interface FieldMeta {
 export const SETTINGS_FIELDS = {
   /** Master switch; the browser half renders nothing while false. */
   enabled: { kind: 'boolean', default: true },
-  /**
-   * Which cat to draw:
-   *   auto   — the original Steam artwork when it has been extracted, else the built-in SVG cat
-   *   native — the original Steam artwork (falls back to SVG when missing)
-   *   svg    — always the built-in SVG cat
-   */
-  renderer: { kind: 'enum', values: ['auto', 'native', 'svg'], default: 'auto' },
-  /** Built-in skin id (see src/client/skins.ts). */
-  skin: { kind: 'string', default: 'classic' },
+  /** Selected original Steam skin (sprite prefix, e.g. "Cat", "Black"). */
+  skin: { kind: 'string', default: 'Cat' },
   /** Server-side revision of the imported custom skin image; 0 = none. */
   customSkinRevision: { kind: 'natural', default: 0, max: 1_000_000_000 },
   /** Frame count of the imported sprite-strip skin (horizontal strip). */
@@ -90,15 +83,7 @@ export const SETTINGS_FIELDS = {
   /** Total taps, persisted here and bumped through stats/bump. */
   counter: { kind: 'natural', default: 0, writable: false },
   /** One-shot first-run hint already shown. */
-  hintSeen: { kind: 'boolean', default: false },
-  /** Easter egg: burst typing triggers freak mode. */
-  eggFreak: { kind: 'boolean', default: true },
-  /** Easter egg: idle for a while and the cat dozes off. */
-  eggSleep: { kind: 'boolean', default: true },
-  /** Easter egg: clicking the cat pets it. */
-  eggPet: { kind: 'boolean', default: true },
-  /** Easter egg: late-night sleepy palette. */
-  eggNight: { kind: 'boolean', default: true }
+  hintSeen: { kind: 'boolean', default: false }
 } as const satisfies Record<string, FieldMeta>
 
 export type SettingsKey = keyof typeof SETTINGS_FIELDS
@@ -155,8 +140,9 @@ export function sanitizeSettingsPatch(patch: unknown): SanitizeResult {
         clean[key] = value
         break
       case 'string':
-        if (typeof value !== 'string' || !/^[a-z0-9-]{1,32}$/.test(value)) {
-          return fail(`${key} must match /^[a-z0-9-]{1,32}$/`)
+        // Steam skin names are CamelCase (e.g. "Cat", "BongoBeatsGold").
+        if (typeof value !== 'string' || !/^[A-Za-z0-9.]{1,64}$/.test(value)) {
+          return fail(`${key} must match /^[A-Za-z0-9.]{1,64}$/`)
         }
         clean[key] = value
         break

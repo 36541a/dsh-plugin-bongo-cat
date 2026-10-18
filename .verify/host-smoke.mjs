@@ -129,7 +129,7 @@ check('prefix route /plugins/bongo-cat/native registered', routes.some((r) => r.
 
 console.log('— config —')
 let r = await rpc('config/get')
-check('config/get returns defaults', r.ok === true && r.value.enabled === true && r.value.skin === 'classic' && r.value.counter === 0, JSON.stringify(r))
+check('config/get returns defaults', r.ok === true && r.value.enabled === true && r.value.skin === 'Cat' && r.value.counter === 0, JSON.stringify(r))
 
 // ── contract guard (ADR-0002 anti-drift): the built plugin's defaults
 // must deep-equal the contract's defaults, key for key.
@@ -163,8 +163,8 @@ check('config/set rejects out-of-range size', r.ok === false && r.error.code ===
 r = await rpc('config/set', { patch: { counter: 99 } })
 check('config/set rejects non-writable counter', r.ok === false)
 
-r = await rpc('config/set', { patch: { skin: 'tabby', position: 'top-left', offsetX: 12 } })
-check('config/set accepts valid patch', r.ok === true && r.value.skin === 'tabby' && r.value.position === 'top-left' && r.value.offsetX === 12, JSON.stringify(r))
+r = await rpc('config/set', { patch: { skin: 'Black', position: 'top-left', offsetX: 12 } })
+check('config/set accepts valid patch', r.ok === true && r.value.skin === 'Black' && r.value.position === 'top-left' && r.value.offsetX === 12, JSON.stringify(r))
 
 // The store must persist to its own file, not to a DSH settings document.
 const settingsFile = join(DSH_HOME, 'storages', 'bongo-cat', 'settings.json')
@@ -174,7 +174,7 @@ try {
 } catch {
   persisted = undefined
 }
-check('config/set persists settings.json', persisted !== undefined && persisted.skin === 'tabby' && persisted.offsetX === 12, JSON.stringify(persisted))
+check('config/set persists settings.json', persisted !== undefined && persisted.skin === 'Black' && persisted.offsetX === 12, JSON.stringify(persisted))
 
 console.log('— stats —')
 r = await rpc('stats/bump', { count: 5 })
@@ -254,11 +254,18 @@ check('native/remove clears the frames', removed.ok === true)
 nativeStatus = await rpc('native/status')
 check('native/status unavailable after removal', nativeStatus.ok === true && nativeStatus.value.available === false)
 
-console.log('— renderer enum —')
-let rendererOk = await rpc('config/set', { patch: { renderer: 'native' } })
-check('config/set accepts renderer=native', rendererOk.ok === true && rendererOk.value.renderer === 'native', JSON.stringify(rendererOk))
-let rendererBad = await rpc('config/set', { patch: { renderer: 'bogus' } })
-check('config/set rejects unknown renderer', rendererBad.ok === false)
+console.log('— skin catalog —')
+mkdirSync(join(nativeDir, 'icons'), { recursive: true })
+writeFileSync(join(nativeDir, 'skins.json'), JSON.stringify({ skins: [{ name: 'Cat' }, { name: 'Black' }] }))
+writeFileSync(join(nativeDir, 'icons', 'Cat.png'), TINY_PNG)
+writeFileSync(join(nativeDir, 'icons', 'Black.png'), TINY_PNG)
+let catalog = await rpc('native/catalog')
+check('native/catalog lists skins', catalog.ok === true && catalog.value.skins.length === 2 && catalog.value.skins.includes('Black'), JSON.stringify(catalog))
+check('native/catalog reports current skin', catalog.ok === true && typeof catalog.value.current === 'string')
+let iconAsset = await callRoute(nativeRoute, 'GET', '/plugins/bongo-cat/native/icons/Black.png?v=1')
+check('icon route serves a skin icon', iconAsset.head?.code === 200 && iconAsset.head?.headers?.['Content-Type'] === 'image/png')
+iconAsset = await callRoute(nativeRoute, 'GET', '/plugins/bongo-cat/native/icons/Nope.png')
+check('icon route 404s unknown skins', iconAsset.head?.code === 404)
 
 console.log('— bad requests —')
 r = await rpc('nope/unknown')

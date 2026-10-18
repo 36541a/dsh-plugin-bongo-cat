@@ -1,18 +1,17 @@
 /**
  * Bongo Cat overlay controller (browser half).
  *
- * Renders the floating cat into the DSH web shell, listens for typing and
- * clicks, drives the paw-tap / freak / sleep / pet / night states, keeps
- * the counter in sync with the host, and persists position changes.
+ * Renders the ORIGINAL Steam Bongo Cat artwork (three frames extracted from
+ * the user's own install) as a floating pet: typing and clicks swap the
+ * frames, drag & double-click reposition it, the counter is batched to the
+ * host, and a hidden tab freezes everything.
  *
- * Everything the cat needs is either static SVG (cat-svg.ts), CSS
- * (cat.module.css), or the /bongo-cat RPC channel — no cross-plugin value
- * imports.
+ * There is no self-drawn cat any more — if the original frames are missing
+ * the overlay shows a small hint instead of a fake cat. A user-imported
+ * sprite-strip image still works as an override.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
-import { CAT_SVG, paletteVars, decoValue } from './cat-svg'
-import { findSkin } from './skins'
 import { BongoSound } from './sound'
 import { BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
 import { BongoCatStore } from './store'
@@ -22,11 +21,6 @@ const ROOT_ID = 'dsh-bongo-cat-root'
 const BASE_WIDTH = 150
 const TAP_MS = 130
 const NATIVE_FRAMES = ['idle', 'tap-left', 'tap-right'] as const
-const FREAK_WINDOW_MS = 1500
-const FREAK_MIN_TAPS = 8
-const FREAK_DURATION_MS = 2500
-const SLEEP_IDLE_MS = 90_000
-const SLEEP_NIGHT_MS = 45_000
 const STATS_FLUSH_TAPS = 20
 const STATS_FLUSH_MS = 4000
 
@@ -91,10 +85,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   const stage = document.createElement('div')
   stage.className = styles['bc-stage']
 
+  // user-imported sprite strip (optional override)
   const sprite = document.createElement('div')
   sprite.className = styles['bc-sprite']
 
-  // ── native (original Steam artwork) layer ─────────────────────
+  // ── original Steam artwork ────────────────────────────────────
   const nativeWrap = document.createElement('div')
   nativeWrap.className = styles['bc-native']
   nativeWrap.dataset.role = 'bongo-cat-native'
@@ -113,9 +108,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   }
   nativeWrap.dataset.active = 'idle'
 
-  const svgHost = document.createElement('div')
-  svgHost.innerHTML = CAT_SVG
-  const svg = svgHost.firstElementChild
+  // shown when no original artwork is available
+  const empty = document.createElement('div')
+  empty.className = styles['bc-empty']
+  empty.dataset.role = 'bongo-cat-empty'
+  empty.textContent = t ? t('nativeMissingShort') : '请先在设置里导入原版资源'
 
   const badge = document.createElement('div')
   badge.className = styles['bc-badge']
@@ -128,8 +125,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   count.textContent = '0'
   badge.append(drum, count)
 
-  if (svg !== null) stage.append(svg)
-  stage.append(sprite, nativeWrap, badge)
+  stage.append(sprite, nativeWrap, empty, badge)
   root.append(stage)
   document.body.append(root)
 
@@ -139,27 +135,16 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let paused = false
   let tapSide: 'left' | 'right' = 'left'
   let tapTimer: number | null = null
-  let freakTimer: number | null = null
-  let idleTimer: number | null = null
   let spriteIdleTimer: number | null = null
   let hintToastTimer: number | null = null
   let sessionTaps = 0
-  let lastInputAt = Date.now()
-  const recentTaps: number[] = []
   let nativeStatus: NativeStatus = { available: false }
   let nativeStamp = ''
   let nativeFrame: (typeof NATIVE_FRAMES)[number] = 'idle'
 
   const cls = (name: string): string => styles[name] ?? name
 
-  // ── settings projection ───────────────────────────────────────
-  const applyPalette = (next: BongoCatSettings): void => {
-    const skin = findSkin(next.skin)
-    root.setAttribute('style', paletteVars(skin))
-    root.dataset.deco = decoValue(skin)
-    root.dataset.scheme = 'light'
-  }
-
+  // ── projection ────────────────────────────────────────────────
   const applySprite = (next: BongoCatSettings): void => {
     const active = next.customSkinRevision > 0
     root.classList.toggle(cls('bc-sprite-mode'), active)
@@ -170,14 +155,19 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     sprite.style.backgroundPosition = '0 50%'
   }
 
-  const stageSize = (next: BongoCatSettings): { width: number; height: number } => {
-    const width = Math.round(BASE_WIDTH * next.size)
-    return { width, height: stage.offsetHeight || Math.round(width / (260 / 230)) }
+  const stageHeight = (width: number): number => {
+    if (root.classList.contains(cls('bc-sprite-mode'))) return Math.round(width * 0.75)
+    const img = nativeImgs.idle
+    if (img !== undefined && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      return Math.round((width * img.naturalHeight) / img.naturalWidth)
+    }
+    return Math.round((width * 501) / 777)
   }
 
   const applyPosition = (next: BongoCatSettings): void => {
-    const { width, height } = stageSize(next)
+    const width = Math.round(BASE_WIDTH * next.size)
     stage.style.width = `${width}px`
+    const height = stage.offsetHeight || stageHeight(width)
     const vw = window.innerWidth
     const vh = window.innerHeight
     let left: number
@@ -213,7 +203,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     root.style.setProperty('--bc-speed', String(Math.min(2.5, Math.max(0.5, next.speed))))
   }
 
-  // ── original artwork (Steam) ──────────────────────────────────
+  // ── original artwork plumbing ─────────────────────────────────
   const applyNativeSources = (): void => {
     if (!nativeStatus.available) return
     const stamp = nativeStamp || nativeStatus.extractedAt || '1'
@@ -226,10 +216,13 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   }
 
   const applyMode = (next: BongoCatSettings): void => {
-    const useNative = next.renderer !== 'svg' && nativeStatus.available
-    root.classList.toggle(cls('bc-native-mode'), useNative)
-    nativeWrap.style.display = useNative ? '' : 'none'
-    if (useNative) applyNativeSources()
+    const custom = next.customSkinRevision > 0
+    const native = !custom && nativeStatus.available
+    root.classList.toggle(cls('bc-native-mode'), native)
+    root.classList.toggle(cls('bc-empty-mode'), !custom && !native)
+    nativeWrap.style.display = native ? '' : 'none'
+    empty.style.display = !custom && !native ? '' : 'none'
+    if (native) applyNativeSources()
   }
 
   const setNativeFrame = (frame: (typeof NATIVE_FRAMES)[number]): void => {
@@ -247,30 +240,18 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     applyPosition(settings)
   }
 
-  const applyNight = (): void => {
-    const hour = new Date().getHours()
-    const night = settings?.eggNight === true && (hour >= 23 || hour < 6)
-    if (night) root.dataset.night = ''
-    else delete root.dataset.night
-  }
-
   const paint = (next: BongoCatSettings): void => {
     const prev = settings
     settings = next
-    if (prev === null || prev.skin !== next.skin) {
-      applyPalette(next)
-      applySpeed(next)
-    }
-    if (prev === null
-      || prev.customSkinRevision !== next.customSkinRevision
+    if (prev === null || prev.customSkinRevision !== next.customSkinRevision
       || prev.customSkinFrames !== next.customSkinFrames) {
       applySprite(next)
     }
+    applySpeed(next)
     applyPosition(next)
     applyBadge(next)
     applySound(next)
     applyMode(next)
-    applyNight()
     root.style.display = next.enabled ? '' : 'none'
     maybeShowHint(next)
   }
@@ -315,27 +296,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     spriteIdleTimer = window.setTimeout(() => {
       sprite.style.backgroundPosition = '0 50%'
       spriteIdleTimer = null
-    }, 700)
-  }
-
-  const enterFreak = (): void => {
-    if (settings?.eggFreak !== true) return
-    root.classList.add(cls('bc-is-freak'))
-    if (freakTimer !== null) window.clearTimeout(freakTimer)
-    freakTimer = window.setTimeout(() => {
-      root.classList.remove(cls('bc-is-freak'))
-      freakTimer = null
-    }, FREAK_DURATION_MS)
-  }
-
-  const wake = (): void => {
-    lastInputAt = Date.now()
-    root.classList.remove(cls('bc-is-sleeping'))
+    }, Math.max(120, TAP_MS * 4))
   }
 
   const slap = (side: 'left' | 'right' | 'both'): void => {
     if (settings === null || paused) return
-    wake()
     if (side === 'left' || side === 'right') {
       tapSide = side
       setTap(side)
@@ -344,26 +309,10 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
       setTap('both')
       setSpriteFrame(3)
     }
-    if (settings.soundEnabled) {
-      const freaking = root.classList.contains(cls('bc-is-freak'))
-      sound.tok(freaking ? 1.45 : 1)
-    }
+    if (settings.soundEnabled) sound.tok(1)
     sessionTaps += 1
     applyBadge(settings)
     stats.add(1)
-
-    const now = Date.now()
-    recentTaps.push(now)
-    while (recentTaps.length > 0 && now - recentTaps[0] > FREAK_WINDOW_MS) recentTaps.shift()
-    if (recentTaps.length >= FREAK_MIN_TAPS) enterFreak()
-  }
-
-  const pet = (): void => {
-    if (settings?.eggPet !== true) return
-    wake()
-    root.classList.add(cls('bc-is-petting'))
-    if (settings.soundEnabled) sound.boop()
-    window.setTimeout(() => root.classList.remove(cls('bc-is-petting')), 750)
   }
 
   const cycleCorner = (): void => {
@@ -446,45 +395,20 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
 
   const onStageClick = (event: MouseEvent): void => {
     if (dragging) return
-    if (event.detail > 1) {
-      cycleCorner()
-      return
-    }
-    pet()
+    if (event.detail > 1) cycleCorner()
   }
 
-  // ── idle watcher (sleep / night / visibility) ─────────────────
-  // Visibility pause, adapted from dsh-wallpaper-engine's occlusion-pause:
-  // a hidden tab keeps no reason to animate, synthesize audio or evaluate
-  // sleep timers. Unlike their window-blur pause (deliberately NOT applied
-  // for desktop shells, where the wallpaper stays visible), page visibility
-  // is unambiguous — nothing is on screen.
+  // ── visibility pause ──────────────────────────────────────────
+  // A hidden tab has no reason to animate or keep the AudioContext alive.
   const onVisibilityChange = (): void => {
     if (disposed) return
     const hidden = document.visibilityState === 'hidden'
     if (hidden === paused) return
     paused = hidden
     root.classList.toggle(cls('bc-paused'), paused)
-    if (paused) {
-      sound.suspend()
-    } else {
-      sound.resume()
-      lastInputAt = Date.now()
-    }
+    if (paused) sound.suspend()
+    else sound.resume()
   }
-
-  const onIdleTick = (): void => {
-    if (disposed || settings === null || paused) return
-    applyNight()
-    if (settings.eggSleep !== true) return
-    const idle = Date.now() - lastInputAt
-    const night = root.dataset.night !== undefined
-    const threshold = night ? SLEEP_NIGHT_MS : SLEEP_IDLE_MS
-    if (idle >= threshold && !root.classList.contains(cls('bc-is-freak'))) {
-      root.classList.add(cls('bc-is-sleeping'))
-    }
-  }
-  idleTimer = window.setInterval(onIdleTick, 5000)
   document.addEventListener('visibilitychange', onVisibilityChange)
 
   // ── resize ────────────────────────────────────────────────────
@@ -526,9 +450,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   return () => {
     disposed = true
     window.clearTimeout(tapTimer ?? 0)
-    window.clearTimeout(freakTimer ?? 0)
     window.clearTimeout(hintToastTimer ?? 0)
-    if (idleTimer !== null) window.clearInterval(idleTimer)
     if (spriteIdleTimer !== null) window.clearTimeout(spriteIdleTimer)
     window.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('pointerdown', onPointerDown, true)

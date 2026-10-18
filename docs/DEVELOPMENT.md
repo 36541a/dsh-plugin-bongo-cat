@@ -11,9 +11,9 @@
 
 `dsh-plugin-bongo-cat` 是一个 DeepSeek Harness（DSH）Web 插件，把 Steam 免费游戏 **Bongo Cat**（app 1337970）的桌宠体验搬进 DSH 的 Web 界面：
 
-- 用户敲键盘 / 点鼠标时，屏幕上悬浮的 SVG 猫咪会举起左右爪交替敲击身下的键盘条；
-- 猫咪可拖拽、可四角停靠，位置与外观设置在 `$DSH_HOME/settings.yaml` 持久化；
-- 插件会扫描本机 Steam 库里的 Bongo Cat 安装目录与创意工坊，让用户把本地图片一键导入为猫咪皮肤；
+- 用户敲键盘 / 点鼠标时，屏幕上悬浮的**原版**猫咪会举起左右爪交替敲击；
+- 猫咪可拖拽、可四角停靠，位置与设置在 `$DSH_HOME/storages/bongo-cat/settings.json` 持久化；
+- 猫咪画面来自本机 Steam 安装的 Bongo Cat：插件自带提取器，把 243 套皮肤的原始精灵导出并按游戏图层合成为三帧；
 - 敲击音效由 WebAudio 实时合成（默认零音频资产），也支持导入 `.wav`；
 - 敲击计数在 host 侧持久化。
 
@@ -94,10 +94,8 @@ dsh-plugin-bongo-cat/
 │   │   └── settings-contract.ts  # ★ 设置单一真源：两端派生（ADR-0002）
 │   └── client/
 │       ├── index.tsx             # browser 端入口（apply + inject）
-│       ├── cat.ts                # 猫咪 overlay 控制器（输入/动画/拖拽/计数/暂停/提示）
-│       ├── cat-svg.ts            # SVG 猫模板、皮肤 CSS 变量、画廊预览
-│       ├── cat.module.css        # 动画关键帧与装饰/状态开关
-│       ├── skins.ts              # 内置皮肤定义（调色板 + 装饰标志）
+│       ├── cat.ts                # 猫咪 overlay 控制器（输入/帧切换/拖拽/计数/暂停/提示）
+│       ├── cat.module.css        # 图层与状态开关
 │       ├── presets.ts            # 心情预置（完整补丁快照）
 │       ├── sound.ts              # WebAudio 合成音效
 │       ├── store.ts              # /bongo-cat RPC 配置存储（合写）
@@ -292,28 +290,26 @@ export function apply(ctx: ClientContext) {
 
 `BongoCatStore` 是 `useSyncExternalStore` 友好的外部存储：`subscribe/getSnapshot` + **合写**（coalescing writer）——滑块连续拖动产生的多个补丁合并，只在途请求返回后重放最新补丁，host 不与自己竞争，UI 不阻塞。
 
-### 5.4 猫咪渲染：SVG + CSS 变量皮肤系统
+### 5.4 猫咪渲染：原版三帧
 
-`cat-svg.ts` 导出一整只猫的 SVG 模板。设计要点：
+画面没有任何自绘素材。`tools/extract-native.py` 从本机游戏导出 `idle / tap-left / tap-right` 三张 PNG，`cat.ts` 把它们预加载成三个叠放的 `<img>`：
 
-- **所有可着色形状都从 CSS 自定义属性取色**（`--bc-fur`、`--bc-eye`、`--bc-accent`……）。换皮肤 = 在 overlay 根节点重写这些属性，零 DOM 重建、零图片请求；
-- **装饰组**（条纹 / 暹罗面具 / 三花补丁 / 白胸斑 / 六种饰品）默认 `display:none`，由根节点的 `data-deco` 属性门控；
-- **三种眼睛**（睁开 / 闭合 / 狂暴）与全部动画由 CSS 类驱动，JS 只负责在正确时机切换类；
-- 动画速度统一乘 `--bc-speed`（`calc(90ms / var(--bc-speed))`），一个滑块全局调速；
-- `prefers-reduced-motion` 时全部动画关闭。
+- 根节点带 `bc-native-mode` 时显示图片层；`nativeWrap.dataset.active` 在 `idle / tap-left / tap-right` 之间切换，只有一张 `display:block`；
+- 敲击时切到对应帧，`TAP_MS`（130ms，按 `speed` 缩放）后回 `idle`；
+- 帧的宽高比由图片自身决定（`naturalWidth/Height`），面板里的 `size` 只控制宽度，高度自动；
+- 没有原版资源时显示 `bc-empty-mode` 的提示块，而不是假猫；
+- 用户导入的自定义精灵图仍是可选覆盖（`bc-sprite-mode`）。
 
-### 5.5 动画状态机
-
-状态不是状态机，是**根节点上的一组互不干扰的类**：
+### 5.5 状态类
 
 | 类 / 属性 | 触发 | 效果 |
 |---|---|---|
-| `bc-tap-left/right/both` | 一次敲击（130ms） | 对应爪下沉 + 对应键盘键高亮 |
-| `bc-is-freak` | 1.5s 内 ≥ 8 击（2.5s） | 双眼变 >_<、双爪高速连打、火花四射、音调升高 |
-| `bc-is-sleeping` | 90s（深夜 45s）无输入 | 闭眼、Zzz 飘字、呼吸变慢 |
-| `bc-is-petting` | 单击猫体（750ms） | 爱心从头顶飘出 + 上升 blip 音 |
-| `data-night` | 23:00–06:00 且开关开 | 饱和度/亮度略降的犯困配色 |
-| `bc-sprite-mode` | 导入了自定义皮肤 | 隐藏 SVG，切换为精灵图帧动画 |
+| `bc-tap-left/right/both` | 一次敲击（130ms） | 切换原生帧 + 轻微下沉 |
+| `bc-native-mode` | 原版资源就绪且未用自定义图 | 显示三帧图片层 |
+| `bc-empty-mode` | 没有原版资源 | 显示"请先导入"提示块 |
+| `bc-sprite-mode` | 导入了自定义精灵图 | 隐藏原版层，改用帧条背景 |
+| `bc-is-dragging` | 拖拽中 | 光标与投影变化 |
+| `bc-paused` | 页面隐藏 | 冻结动画、挂起音频 |
 
 ### 5.6 输入监听与节流
 
@@ -352,10 +348,11 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
 
-- 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` 与 `DefaultBongoLeft/Right(+Punch)` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 1020×750 的 `idle / tap-left / tap-right`。- 合成规则（v0.4.2 起默认**不含手鼓**）：身体先画、右爪后画（与游戏图层一致），右爪用**作者原坐标**——游戏里它搭在鼓上，去掉鼓后正好落在身体右下沿；打击帧把右爪再下压 8px，不再叠原版打击弧线（那条线服务于"爪子藏到鼓后"，单独存在像断爪）。`--with-drums` 可恢复双鼓构图，此时鼓先画、爪后画，打击帧按 alpha 包围盒底边中心对齐。
+- 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 777×501 的 `idle / tap-left / tap-right`。`--catalog` 另导出每套皮肤的 `<Skin>Icon`（243 张）与 `skins.json`。
+- 合成规则（v0.4.2 起默认**不含手鼓**）：身体先画、右爪后画（与游戏图层一致），右爪用**作者原坐标**——游戏里它搭在鼓上，去掉鼓后正好落在身体右下沿；打击帧把右爪再下压 8px，不再叠原版打击弧线（那条线服务于"爪子藏到鼓后"，单独存在像断爪）。`--with-drums` 可恢复双鼓构图。
 - 裁切：无鼓模式按三帧内容的并集包围盒裁切（+8px 边距），产物约 777×588。
 - 服务（host）：`native/status` 校验 `native.json` + 三张帧是否齐全；`native/import` 先解析解释器——已有 `storages/bongo-cat/pyenv` 就直接用；否则找 `DSH_BC_PYTHON` / `python` / `python3` / `py -3` / `%LOCALAPPDATA%\Programs\Python\Python3*` / `%PROGRAMFILES%\Python3*`，哪个能 `import UnityPy, PIL` 就用哪个；都没有时用任一可用 Python **建插件私有 venv 并 `pip install UnityPy`**（约 26 秒，不改动系统环境），再执行提取器。静态路由 `/plugins/bongo-cat/native/*.png` 只认三个白名单帧名。
-- 渲染（client）：`cat.ts` 预创建三张 `<img>` 叠放，根节点 `bc-native-mode` 时隐藏 SVG；`data-active` 切帧，敲击 130ms 后回 `idle`。`renderer=svg` 强制回内置猫；`auto` 在资源就绪时用原版。
+- 渲染（client）：`cat.ts` 预创建三张 `<img>` 叠放，根节点 `bc-native-mode` 显示图片层；`data-active` 切帧，敲击 130ms 后回 `idle`。没有原版资源时显示 `bc-empty-mode` 提示；自定义精灵图作为可选覆盖。
 - 缓存与刷新：帧 URL 带 `?v=<extractedAt>`；设置面板导入/移除后派发 `bongo-cat:native-changed` 事件，overlay 收到后重新拉 `native/status` 并重绘，无需刷新页面。
 
 ---
@@ -394,20 +391,16 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 ## 7. 皮肤规范
 
-### 7.1 内置皮肤
+### 7.1 Steam 皮肤
 
-一款皮肤 = 一个调色板 + 若干装饰标志（`src/client/skins.ts`）：
+皮肤不是插件内置素材，而是游戏的精灵命名空间：
 
-```ts
-{
-  id: 'tabby', name: '橘猫条条',
-  palette: { fur: '#ffb35c', stripe: '#e07f22', … },
-  stripes: true,
-  accessory: 'none'
-}
-```
+- 一套皮肤 = `<Skin>Left / LeftPunch / Right / RightPunch` 四个精灵，外加一张 `<Skin>Icon`（选择器缩略图）；
+- `native/catalog` 返回 `skins.json` 里的 243 个名字；图标由 `/plugins/bongo-cat/native/icons/<Name>.png` 提供；
+- 点图标 → `native/import { skin }` → 提取器用该皮肤合成三帧并写入 `native/` → 客户端收到 `bongo-cat:native-changed` 后重载；
+- `skin` 设置项记录当前皮肤名，重启后从 `native/` 直接加载，不重复提取。
 
-`palette` 键与 CSS 变量一一对应（`fur` → `--bc-fur`）。新增一款内置皮肤只需往 `BUILT_IN_SKINS`  push 一项，画廊、data-deco 门控、SVG 取色全部自动生效。
+新增/更新皮肤无需改代码：游戏更新后重跑一次 `native/import`（会顺带刷新图标目录）。
 
 ### 7.2 自定义精灵图皮肤
 
@@ -463,7 +456,7 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 |---|---|---|---|
 | `enabled` | boolean | `true` | 总开关 |
 | `renderer` | enum | `auto` | `auto` / `native` / `svg`：自动优先原版美术 |
-| `skin` | string | `classic` | 内置皮肤 id，`/^[a-z0-9-]{1,32}$/` |
+| `skin` | string | `Cat` | Steam 皮肤名（精灵前缀），`/^[A-Za-z0-9.]{1,64}$/` |
 | `customSkinRevision` | natural | `0` | 自定义皮肤 revision，0 = 无 |
 | `customSkinFrames` | natural | `4` | 精灵图帧数 2–12 |
 | `size` | number | `1.2` | 缩放 0.5–3 |
@@ -496,12 +489,11 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 | 想做的事 | 改哪里 | 要点 |
 |---|---|---|
-| 加内置皮肤 | `skins.ts` push 一项 | 调色板键名 = CSS 变量名；装饰走 `data-deco` |
-| 加新彩蛋 | `cat.ts` 加一个根类 + `cat.module.css` 写动画 | 开关放进 settings schema + `CONFIG_FIELDS` + 面板 + 字典 |
+| 加 Steam 皮肤 | 游戏更新后重跑 `native/import` | 图标目录与 `skins.json` 会自动刷新 |
 | 加新 RPC endpoint | `index.ts` dispatch switch + `settings.ts` 类型 + `store.ts` 封装 | 记得同步 §8.1 文档 |
-| 换猫咪造型 | `cat-svg.ts` 改 SVG 模板 | 新形状的取色一律走 `var(--bc-*)` |
+| 换猫咪合成方式 | `tools/extract-native.py` 的 `compose()` | 参数见文件头的 `ORIGIN` / `PAW_SINK` 注释 |
 | 支持 Wallpaper Engine 式视频皮肤 | host 加 media 路由（Range 支持） | 参考 `mengzhangj/dsh-wallpaper` 的实现 |
-| 接 Bongo Cat 原版计数 | host 读 `%APPDATA%\BongoCat` 存档 | 只读；注意格式随游戏版本变动 |
+| 接 Bongo Cat 原版计数 | host 读 Steam 云存档 `presets.json` | 只读；注意格式随游戏版本变动 |
 
 ---
 
@@ -516,12 +508,12 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 ## 12. 附：自动化冒烟测试与守卫
 
-仓库内置两级验证，双端共 85 项断言 + 契约/CSS 守卫，改动双端代码后应保持全绿：
+仓库内置两级验证，双端共 83 项断言 + 契约/CSS 守卫，改动双端代码后应保持全绿：
 
 | 测试 | 覆盖内容 |
 |---|---|
-| `.verify/host-smoke.mjs`（45 项） | settings 自带存储（无 ctx.settings）、四条路由、RPC 信封、**契约对账**、消毒器单元断言、**原版资源**（status / 帧路由 / info / remove）、renderer 枚举、stats、skins/sounds 导入、资产路由 200/404、越权路径拒绝 |
-| `.verify/client-smoke.mjs`（40 项） | ModuleLoader 协议、locale/section 注册、overlay 挂载、敲击与修饰键、**原版模式**（挂载、帧 URL、切帧、renderer 切换）、可见性暂停、首启提示、换肤重绘、dispose |
+| `.verify/host-smoke.mjs`（47 项） | settings 自带存储（无 ctx.settings）、四条路由、RPC 信封、**契约对账**、消毒器单元断言、**原版资源**（status / 帧路由 / info / remove）、**皮肤目录与图标路由**、stats、skins/sounds 导入、资产路由 200/404、越权路径拒绝 |
+| `.verify/client-smoke.mjs`（36 项） | ModuleLoader 协议、locale/section 注册、overlay 挂载、敲击与修饰键、**原版模式**（挂载、帧 URL、切帧、皮肤选择持久化）、可见性暂停、首启提示、dispose |
 | `scripts/verify.mjs` 硬档 | 构建新鲜度、契约探针、**CSS 模块键名核对**（styles.* / cls() 必须在样式表中存在） |
 | `scripts/verify.mjs` 软档 | 发布面、i18n 三查、CHANGELOG |
 

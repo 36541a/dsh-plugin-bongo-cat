@@ -1,16 +1,16 @@
 /**
- * The Bongo Cat settings section: skin gallery (built-in + imported
- * sprite strips), Steam scanner import, sound controls, position /
- * size / speed, the tap counter and the easter-egg toggles. Durable
- * fields ride the /bongo-cat RPC channel; asset bytes ride
- * skins/import and sounds/import.
+ * The Bongo Cat settings section: the original Steam skin picker, position /
+ * size / speed, the tap counter, sound and mood presets. Durable fields ride
+ * the /bongo-cat RPC channel; the artwork itself is extracted from the user's
+ * own Bongo Cat install (native/*).
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
-import { catPreviewSvg } from './cat-svg'
-import { BUILT_IN_SKINS } from './skins'
 import { PRESETS } from './presets'
-import { BongoCatSettings, BongoCatKey, ImportResult, NativeStatus, RpcResult, ScannedRoot, skinUrl } from './settings'
+import {
+  BongoCatSettings, BongoCatKey, ImportResult, NativeStatus, RpcResult, ScannedRoot,
+  nativeIconUrl, skinUrl
+} from './settings'
 import { BongoCatSnapshot, BongoCatStore } from './store'
 import styles from './BongoCatSection.module.css'
 
@@ -23,6 +23,13 @@ export interface BongoCatSectionInjected {
 
 interface BongoCatSectionProps extends BongoCatSectionInjected {
   close: () => void
+}
+
+interface Catalog {
+  skins: string[]
+  current: string
+  stamp: string
+  available: boolean
 }
 
 const POSITIONS: BongoCatSettings['position'][] = ['bottom-right', 'bottom-left', 'top-left', 'top-right']
@@ -62,19 +69,23 @@ export function BongoCatSection(props: BongoCatSectionProps) {
   const [error, setError] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [roots, setRoots] = useState<ScannedRoot[] | null>(null)
-  const [importedPath, setImportedPath] = useState<string | null>(null)
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null)
   const [native, setNative] = useState<NativeStatus>({ available: false })
+  const [catalog, setCatalog] = useState<Catalog>({ skins: [], current: '', stamp: '', available: false })
   const [nativeBusy, setNativeBusy] = useState(false)
+  const [pendingSkin, setPendingSkin] = useState<string | null>(null)
   const [nativeError, setNativeError] = useState<string | null>(null)
+  const [showCustom, setShowCustom] = useState(false)
   const skinInputRef = useRef<HTMLInputElement>(null)
   const soundInputRef = useRef<HTMLInputElement>(null)
 
   const writable = isLoopback
 
   const loadNative = async (): Promise<void> => {
-    const result = await rpc.call('/bongo-cat', 'native/status', {}) as RpcResult<NativeStatus>
-    setNative(result.ok ? result.value : { available: false })
+    const status = await rpc.call('/bongo-cat', 'native/status', {}) as RpcResult<NativeStatus>
+    setNative(status.ok ? status.value : { available: false })
+    const list = await rpc.call('/bongo-cat', 'native/catalog', {}) as RpcResult<Catalog>
+    if (list.ok) setCatalog(list.value)
   }
 
   useEffect(() => {
@@ -82,18 +93,22 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const importNative = async (): Promise<void> => {
+  const importNative = async (skin?: string): Promise<void> => {
     setNativeBusy(true)
+    setPendingSkin(skin ?? null)
     setNativeError(null)
     try {
-      const result = await rpc.call('/bongo-cat', 'native/import', {}) as RpcResult<NativeStatus>
+      const result = await rpc.call('/bongo-cat', 'native/import', skin === undefined ? {} : { skin }) as RpcResult<NativeStatus>
       if (!result.ok) throw new Error(result.error.message)
       setNative(result.value)
+      await store.set({ skin: result.value.skin ?? skin ?? settings?.skin ?? 'Cat' })
+      await loadNative()
       window.dispatchEvent(new Event('bongo-cat:native-changed'))
     } catch (err) {
       setNativeError(err instanceof Error ? err.message : String(err))
     } finally {
       setNativeBusy(false)
+      setPendingSkin(null)
     }
   }
 
@@ -104,6 +119,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
       const result = await rpc.call('/bongo-cat', 'native/remove', {}) as RpcResult<{ removed: boolean }>
       if (!result.ok) throw new Error(result.error.message)
       setNative({ available: false })
+      setCatalog({ skins: [], current: '', stamp: '', available: false })
       window.dispatchEvent(new Event('bongo-cat:native-changed'))
     } catch (err) {
       setNativeError(err instanceof Error ? err.message : String(err))
@@ -131,58 +147,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     }
   }
 
-  const importSkinFile = async (file: File): Promise<void> => {
-    if (file.size > MAX_SKIN_BYTES) {
-      setError(t('tooLarge'))
-      return
-    }
-    await run(async () => {
-      const data = await readFileAsBase64(file)
-      const result = await rpc.call('/bongo-cat', 'skins/import', { data, name: file.name }) as RpcResult<ImportResult>
-      if (!result.ok) throw new Error(result.error.message)
-      await store.load()
-    })
-  }
-
-  const importSkinPath = async (path: string, name: string): Promise<void> => {
-    await run(async () => {
-      const result = await rpc.call('/bongo-cat', 'skins/import', { path, name }) as RpcResult<ImportResult>
-      if (!result.ok) throw new Error(result.error.message)
-      setImportedPath(name)
-      await store.load()
-    })
-  }
-
-  const removeSkin = async (): Promise<void> => {
-    await run(async () => {
-      const result = await rpc.call('/bongo-cat', 'skins/remove', {}) as RpcResult<{ removed: boolean }>
-      if (!result.ok) throw new Error(result.error.message)
-      await store.load()
-    })
-  }
-
-  const importSoundFile = async (file: File): Promise<void> => {
-    if (file.size > MAX_SOUND_BYTES) {
-      setError(t('tooLarge'))
-      return
-    }
-    await run(async () => {
-      const data = await readFileAsBase64(file)
-      const result = await rpc.call('/bongo-cat', 'sounds/import', { data, name: file.name }) as RpcResult<ImportResult>
-      if (!result.ok) throw new Error(result.error.message)
-      await store.load()
-    })
-  }
-
-  const removeSound = async (): Promise<void> => {
-    await run(async () => {
-      const result = await rpc.call('/bongo-cat', 'sounds/remove', {}) as RpcResult<{ removed: boolean }>
-      if (!result.ok) throw new Error(result.error.message)
-      await store.load()
-    })
-  }
-
-  const scan = async (): Promise<void> => {
+  const doScan = async (): Promise<void> => {
     setScanning(true)
     setError(null)
     try {
@@ -196,6 +161,56 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     }
   }
 
+  const importSkinFile = async (file: File): Promise<void> => {
+    if (file.size > MAX_SKIN_BYTES) {
+      setError(t('tooLarge'))
+      return
+    }
+    await run(async () => {
+      const data = await readFileAsBase64(file)
+      const result = await rpc.call('/bongo-cat', 'skins/import', { data, name: file.name }) as RpcResult<ImportResult>
+      if (!result.ok) throw new Error(result.error.message)
+      await store.set({ customSkinRevision: result.value.revision })
+    })
+  }
+
+  const importSkinFromPath = async (path: string): Promise<void> => {
+    await run(async () => {
+      const result = await rpc.call('/bongo-cat', 'skins/import', { path }) as RpcResult<ImportResult>
+      if (!result.ok) throw new Error(result.error.message)
+      await store.set({ customSkinRevision: result.value.revision })
+    })
+  }
+
+  const removeCustomSkin = async (): Promise<void> => {
+    await run(async () => {
+      const result = await rpc.call('/bongo-cat', 'skins/remove', {}) as RpcResult<{ removed: boolean }>
+      if (!result.ok) throw new Error(result.error.message)
+      await store.set({ customSkinRevision: 0 })
+    })
+  }
+
+  const importSound = async (file: File): Promise<void> => {
+    if (file.size > MAX_SOUND_BYTES) {
+      setError(t('tooLarge'))
+      return
+    }
+    await run(async () => {
+      const data = await readFileAsBase64(file)
+      const result = await rpc.call('/bongo-cat', 'sounds/import', { data, name: file.name }) as RpcResult<ImportResult>
+      if (!result.ok) throw new Error(result.error.message)
+      await store.set({ customSoundRevision: result.value.revision })
+    })
+  }
+
+  const removeSound = async (): Promise<void> => {
+    await run(async () => {
+      const result = await rpc.call('/bongo-cat', 'sounds/remove', {}) as RpcResult<{ removed: boolean }>
+      if (!result.ok) throw new Error(result.error.message)
+      await store.set({ customSoundRevision: 0 })
+    })
+  }
+
   const resetCounter = async (): Promise<void> => {
     await run(async () => {
       const result = await rpc.call('/bongo-cat', 'stats/reset', {}) as RpcResult<{ counter: number }>
@@ -204,17 +219,22 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     })
   }
 
-  if (snapshot.status === 'loading') {
-    return <div className={styles.hint}>{t('loading')}</div>
-  }
-  if (snapshot.status === 'unavailable' || settings === undefined) {
-    return <div className={styles.hint}>{t('unavailable')}</div>
+  if (settings === undefined) {
+    return (
+      <div className={styles.section}>
+        <div className={styles.hint}>
+          {snapshot.status === 'error' ? t('unavailable') : t('loading')}
+        </div>
+      </div>
+    )
   }
 
-  const totalFiles = roots?.reduce((sum, root) => sum + root.files.length, 0) ?? 0
+  const currentSkin = settings.customSkinRevision > 0 ? '' : (catalog.current || settings.skin)
 
   return (
     <div className={styles.section}>
+      {!isLoopback && <div className={styles.warning}>{t('remoteWarning')}</div>}
+
       <div className={styles.hint}>{t('hint')}</div>
 
       <label className={styles.check}>
@@ -223,22 +243,13 @@ export function BongoCatSection(props: BongoCatSectionProps) {
         <span>{t('enabledLabel')}</span>
       </label>
 
-      {/* ── cat source: original Steam artwork ─────────────────── */}
+      {/* ── original Steam artwork ─────────────────────────────── */}
       <div className={styles.group}>
-        <div className={styles['group-title']}>{t('rendererLabel')}</div>
-        <div className={styles.row}>
-          <select className={styles.select} value={settings.renderer}
-            onChange={(event) => void store.set({ renderer: event.target.value })}>
-            <option value='auto'>{t('rendererAuto')}</option>
-            <option value='native'>{t('rendererNative')}</option>
-            <option value='svg'>{t('rendererSvg')}</option>
-          </select>
-        </div>
-        <div className={styles['group-title']} style={{ fontWeight: 400, opacity: 0.7 }}>{t('nativeLabel')}</div>
+        <div className={styles['group-title']}>{t('steamSkinsLabel')}</div>
         <div className={styles.row}>
           <span className={styles.note}>
             {native.available
-              ? `✓ ${t('nativeReady')} · ${native.skin ?? ''}${native.size ? ` · ${native.size[0]}×${native.size[1]}` : ''}`
+              ? `✓ ${t('nativeReady')} · ${settings.skin}${native.size ? ` · ${native.size[0]}×${native.size[1]}` : ''}`
               : t('nativeMissing')}
           </span>
         </div>
@@ -254,8 +265,27 @@ export function BongoCatSection(props: BongoCatSectionProps) {
             </button>
           )}
         </div>
+
+        {catalog.skins.length > 0 && (
+          <div className={styles['skin-grid']}>
+            {catalog.skins.map((name) => (
+              <button key={name} type='button' title={name}
+                className={`${styles['skin-cell']} ${name === currentSkin ? styles['skin-cell-active'] : ''}`}
+                disabled={!writable || nativeBusy}
+                onClick={() => {
+                  if (name === currentSkin && native.available) return
+                  void importNative(name)
+                }}>
+                <img className={styles['skin-icon']} loading='lazy' alt={name}
+                  src={nativeIconUrl(name, catalog.stamp)} />
+                {pendingSkin === name && <span className={styles['skin-badge']}>…</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className={styles.note}>{t('nativeHint')}</div>
-        {nativeBusy && <div className={styles.hint}>{t('nativeBusy')}</div>}
+        {nativeBusy && <div className={styles.hint}>{pendingSkin ? `${t('skinImporting')} ${pendingSkin}` : t('nativeBusy')}</div>}
         {nativeError !== null && <div className={styles.error}>{t('nativeFailed')}: {nativeError}</div>}
       </div>
 
@@ -275,122 +305,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
         {appliedPreset !== null && <div className={styles.note}>{t('presetApplied')}</div>}
       </div>
 
-      {/* ── skins ─────────────────────────────────────────────── */}
-      <div className={styles.group}>
-        <div className={styles['group-title']}>{t('skinLabel')}</div>
-        <div className={styles['group-title']} style={{ fontWeight: 400, opacity: 0.7 }}>{t('builtinLabel')}</div>
-        <div className={styles.gallery}>
-          {BUILT_IN_SKINS.map((skin) => (
-            <button key={skin.id} type='button'
-              className={`${styles['skin-card']} ${settings.skin === skin.id ? styles.selected : ''}`}
-              onClick={() => void store.set({ skin: skin.id })}>
-              <span dangerouslySetInnerHTML={{ __html: catPreviewSvg(skin) }} />
-              <span className={styles['skin-name']}>{skin.name}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className={styles['group-title']} style={{ fontWeight: 400, opacity: 0.7 }}>{t('customLabel')}</div>
-        {settings.customSkinRevision > 0 && (
-          <div className={styles['preview-strip']}>
-            <img className={styles['preview-thumb']} src={skinUrl(settings.customSkinRevision)} alt='' />
-            <div className={styles.row}>
-              <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
-                disabled={!writable || busy} onClick={() => void removeSkin()}>
-                {t('removeSkinButton')}
-              </button>
-            </div>
-          </div>
-        )}
-        <div className={styles.row}>
-          <input ref={skinInputRef} type='file' accept='image/png,image/webp,image/gif,image/jpeg,image/bmp'
-            className={styles['hidden-input']}
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null
-              event.target.value = ''
-              if (file !== null) void importSkinFile(file)
-            }} />
-          <button type='button' className={`${styles.btn} ${styles['btn-primary']}`}
-            disabled={!writable || busy} onClick={() => skinInputRef.current?.click()}>
-            {t('importSkinButton')}
-          </button>
-          <span className={styles.value}>{t('framesLabel')}</span>
-          <input className={styles.range} type='range' min={2} max={12} step={1}
-            value={settings.customSkinFrames}
-            onChange={(event) => void store.set({ customSkinFrames: Number(event.target.value) })} />
-          <span className={styles.value}>{settings.customSkinFrames}</span>
-        </div>
-        <div className={styles.note}>{t('framesHint')}</div>
-
-        <div className={styles.row}>
-          <button type='button' className={styles.btn} disabled={!writable || scanning}
-            onClick={() => void scan()}>
-            {scanning ? t('scanning') : t('scanButton')}
-          </button>
-          <span className={styles.note}>{t('scanHint')}</span>
-        </div>
-        {roots !== null && (
-          <div className={styles['scan-list']}>
-            {roots.length === 0 && <div className={styles.note}>{t('scanEmpty')}</div>}
-            {roots.map((rootEntry) => (
-              <div key={rootEntry.path} className={styles['scan-root']}>
-                <div className={styles['scan-root-label']}>{rootEntry.label}</div>
-                <div className={styles['scan-root-path']}>{rootEntry.path}</div>
-                {rootEntry.files.length === 0 && <div className={styles.note}>{t('scanEmpty')}</div>}
-                <div className={styles['scan-files']}>
-                  {rootEntry.files.map((file) => (
-                    <button key={file.path} type='button' className={styles['scan-file']}
-                      disabled={!writable || busy}
-                      title={`${file.path} · ${(file.size / 1024).toFixed(0)} KB`}
-                      onClick={() => void importSkinPath(file.path, file.name)}>
-                      <span>{importedPath === file.name ? `${file.name} ✓` : file.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {totalFiles > 0 && <div className={styles.note}>· {totalFiles}</div>}
-          </div>
-        )}
-      </div>
-
-      {/* ── sound ─────────────────────────────────────────────── */}
-      <div className={styles.group}>
-        <div className={styles['group-title']}>{t('soundLabel')}</div>
-        <label className={styles.check}>
-          <input type='checkbox' checked={settings.soundEnabled}
-            onChange={(event) => void store.set({ soundEnabled: event.target.checked })} />
-          <span>{t('soundOnLabel')}</span>
-        </label>
-        <div className={styles.row}>
-          <span className={styles.label}>{t('volumeLabel')}</span>
-          <input className={styles.range} type='range' min={0} max={100} value={Math.round(settings.volume * 100)}
-            onChange={(event) => void store.set({ volume: Number(event.target.value) / 100 })} />
-          <span className={styles.value}>{Math.round(settings.volume * 100)}%</span>
-        </div>
-        <div className={styles.row}>
-          <input ref={soundInputRef} type='file' accept='audio/wav,audio/mpeg,audio/ogg'
-            className={styles['hidden-input']}
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null
-              event.target.value = ''
-              if (file !== null) void importSoundFile(file)
-            }} />
-          <button type='button' className={styles.btn}
-            disabled={!writable || busy} onClick={() => soundInputRef.current?.click()}>
-            {t('importSoundButton')}
-          </button>
-          {settings.customSoundRevision > 0 && (
-            <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
-              disabled={!writable || busy} onClick={() => void removeSound()}>
-              {t('removeSoundButton')}
-            </button>
-          )}
-        </div>
-        <div className={styles.note}>{settings.customSoundRevision > 0 ? '🎵 ' + settings.customSoundRevision : '🔔 '}</div>
-      </div>
-
-      {/* ── position & size ───────────────────────────────────── */}
+      {/* ── position & size ────────────────────────────────────── */}
       <div className={styles.group}>
         <div className={styles['group-title']}>{t('positionLabel')}</div>
         <div className={styles.row}>
@@ -403,73 +318,149 @@ export function BongoCatSection(props: BongoCatSectionProps) {
           ))}
         </div>
         <div className={styles.row}>
-          <span className={styles.label}>{t('offsetLabel')}</span>
-          <input className={styles.range} type='range' min={0} max={240} value={Math.min(240, settings.offsetX)}
+          <label className={styles.label}>{t('sizeLabel')}</label>
+          <input className={styles.range} type='range' min='0.5' max='3' step='0.05'
+            value={settings.size}
+            onChange={(event) => void store.set({ size: Number(event.target.value) })} />
+          <span className={styles.value}>{settings.size.toFixed(2)}×</span>
+        </div>
+        <div className={styles.row}>
+          <label className={styles.label}>{t('speedLabel')}</label>
+          <input className={styles.range} type='range' min='0.5' max='2.5' step='0.05'
+            value={settings.speed}
+            onChange={(event) => void store.set({ speed: Number(event.target.value) })} />
+          <span className={styles.value}>{settings.speed.toFixed(2)}×</span>
+        </div>
+        <div className={styles.row}>
+          <label className={styles.label}>{t('offsetLabel')}</label>
+          <input className={styles.range} type='range' min='0' max='400' step='1'
+            value={settings.offsetX}
             onChange={(event) => void store.set({ offsetX: Number(event.target.value) })} />
           <span className={styles.value}>{settings.offsetX}px</span>
         </div>
-        <div className={styles.row}>
-          <span className={styles.label}>{t('offsetLabel')}</span>
-          <input className={styles.range} type='range' min={0} max={240} value={Math.min(240, settings.offsetY)}
-            onChange={(event) => void store.set({ offsetY: Number(event.target.value) })} />
-          <span className={styles.value}>{settings.offsetY}px</span>
-        </div>
-        <div className={styles.row}>
-          <span className={styles.label}>{t('sizeLabel')}</span>
-          <input className={styles.range} type='range' min={50} max={300} value={Math.round(settings.size * 100)}
-            onChange={(event) => void store.set({ size: Number(event.target.value) / 100 })} />
-          <span className={styles.value}>{Math.round(settings.size * 100)}%</span>
-        </div>
-        <div className={styles.row}>
-          <span className={styles.label}>{t('speedLabel')}</span>
-          <input className={styles.range} type='range' min={50} max={250} value={Math.round(settings.speed * 100)}
-            onChange={(event) => void store.set({ speed: Number(event.target.value) / 100 })} />
-          <span className={styles.value}>{Math.round(settings.speed * 100)}%</span>
-        </div>
       </div>
 
-      {/* ── counter ───────────────────────────────────────────── */}
+      {/* ── counter ────────────────────────────────────────────── */}
       <div className={styles.group}>
         <div className={styles['group-title']}>{t('counterLabel')}</div>
         <div className={styles.row}>
-          <span className={styles.label} style={{ fontSize: 20, fontWeight: 700 }}>
-            🥁 {settings.counter.toLocaleString()}
-          </span>
+          <span className={styles.value}>{settings.counter.toLocaleString()}</span>
+          <label className={styles.check}>
+            <input type='checkbox' checked={settings.showCounter}
+              onChange={(event) => void store.set({ showCounter: event.target.checked })} />
+            <span>{t('counterLabel')}</span>
+          </label>
           <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
-            disabled={!writable || busy} onClick={() => void resetCounter()}>
+            disabled={!writable} onClick={() => void resetCounter()}>
             {t('counterReset')}
           </button>
         </div>
       </div>
 
-      {/* ── easter eggs ───────────────────────────────────────── */}
+      {/* ── sound ──────────────────────────────────────────────── */}
       <div className={styles.group}>
-        <div className={styles['group-title']}>{t('eggsLabel')}</div>
+        <div className={styles['group-title']}>{t('soundLabel')}</div>
         <label className={styles.check}>
-          <input type='checkbox' checked={settings.eggFreak}
-            onChange={(event) => void store.set({ eggFreak: event.target.checked })} />
-          <span>{t('eggFreak')}</span>
+          <input type='checkbox' checked={settings.soundEnabled}
+            onChange={(event) => void store.set({ soundEnabled: event.target.checked })} />
+          <span>{t('soundOnLabel')}</span>
         </label>
-        <label className={styles.check}>
-          <input type='checkbox' checked={settings.eggSleep}
-            onChange={(event) => void store.set({ eggSleep: event.target.checked })} />
-          <span>{t('eggSleep')}</span>
-        </label>
-        <label className={styles.check}>
-          <input type='checkbox' checked={settings.eggPet}
-            onChange={(event) => void store.set({ eggPet: event.target.checked })} />
-          <span>{t('eggPet')}</span>
-        </label>
-        <label className={styles.check}>
-          <input type='checkbox' checked={settings.eggNight}
-            onChange={(event) => void store.set({ eggNight: event.target.checked })} />
-          <span>{t('eggNight')}</span>
-        </label>
+        <div className={styles.row}>
+          <label className={styles.label}>{t('volumeLabel')}</label>
+          <input className={styles.range} type='range' min='0' max='1' step='0.05'
+            value={settings.volume}
+            onChange={(event) => void store.set({ volume: Number(event.target.value) })} />
+          <span className={styles.value}>{Math.round(settings.volume * 100)}%</span>
+        </div>
+        <div className={styles.row}>
+          <button type='button' className={styles.btn} disabled={!writable}
+            onClick={() => soundInputRef.current?.click()}>
+            {t('importSoundButton')}
+          </button>
+          {settings.customSoundRevision > 0 && (
+            <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
+              disabled={!writable} onClick={() => void removeSound()}>
+              {t('removeSoundButton')}
+            </button>
+          )}
+          <input ref={soundInputRef} type='file' accept='.wav' className={styles['hidden-input']}
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (file) void importSound(file)
+            }} />
+        </div>
       </div>
 
-      {!isLoopback && <div className={styles.warning}>{t('remoteWarning')}</div>}
+      {/* ── custom image (optional override) ───────────────────── */}
+      <div className={styles.group}>
+        <button type='button' className={styles['group-toggle']}
+          onClick={() => setShowCustom((value) => !value)}>
+          {showCustom ? '▾' : '▸'} {t('customLabel')}
+        </button>
+        {showCustom && (
+          <>
+            <div className={styles.note}>{t('framesHint')}</div>
+            <div className={styles.row}>
+              <button type='button' className={`${styles.btn} ${styles['btn-primary']}`}
+                disabled={!writable} onClick={() => skinInputRef.current?.click()}>
+                {t('importSkinButton')}
+              </button>
+              {settings.customSkinRevision > 0 && (
+                <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
+                  disabled={!writable} onClick={() => void removeCustomSkin()}>
+                  {t('removeSkinButton')}
+                </button>
+              )}
+              <input ref={skinInputRef} type='file' accept='image/*' className={styles['hidden-input']}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void importSkinFile(file)
+                }} />
+            </div>
+            {settings.customSkinRevision > 0 && (
+              <div className={styles.row}>
+                <div className={styles['preview-strip']}>
+                  <img className={styles['preview-thumb']} src={skinUrl(settings.customSkinRevision)} alt='' />
+                </div>
+                <label className={styles.label}>{t('framesLabel')}</label>
+                <input className={styles.range} type='range' min='2' max='12' step='1'
+                  value={settings.customSkinFrames}
+                  onChange={(event) => void store.set({ customSkinFrames: Number(event.target.value) })} />
+                <span className={styles.value}>{settings.customSkinFrames}</span>
+              </div>
+            )}
+            <div className={styles.row}>
+              <button type='button' className={styles.btn} disabled={!writable || scanning}
+                onClick={() => void doScan()}>
+                {scanning ? t('scanning') : t('scanButton')}
+              </button>
+            </div>
+            {roots !== null && roots.length === 0 && <div className={styles.note}>{t('scanEmpty')}</div>}
+            {roots !== null && roots.length > 0 && (
+              <div className={styles['scan-list']}>
+                {roots.map((rootEntry) => (
+                  <div key={rootEntry.path} className={styles['scan-root']}>
+                    <div className={styles['scan-root-label']}>{rootEntry.label}</div>
+                    <div className={styles['scan-root-path']}>{rootEntry.path}</div>
+                    <div className={styles['scan-files']}>
+                      {rootEntry.files.map((file) => (
+                        <button key={file.path} type='button' className={styles['scan-file']}
+                          disabled={!writable || busy} onClick={() => void importSkinFromPath(file.path)}>
+                          {file.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {error !== null && <div className={styles.error}>{error}</div>}
-      {busy && <div className={styles.hint}>{t('busy')}</div>}
     </div>
   )
 }

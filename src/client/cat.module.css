@@ -1,320 +1,33 @@
-/* Bongo Cat overlay — motion & decoration gates.
+/* Bongo Cat overlay — original Steam artwork + counter badge.
    Class names are scoped by the build script's CSS-modules pass; cat.ts
-   imports the generated map. State classes (.is-*) are toggled from JS,
-   decorations are gated by the [data-deco] attribute on the root. */
+   imports the generated map. */
 
 .bc-root {
   position: fixed;
   z-index: 9999;
-  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
   font-family: inherit;
-  transition: left 0.25s ease, top 0.25s ease;
+  filter: drop-shadow(0 6px 14px rgba(30, 34, 48, 0.18));
 }
 
 .bc-root.bc-is-dragging {
-  transition: none;
+  cursor: grabbing;
+  filter: drop-shadow(0 12px 22px rgba(30, 34, 48, 0.28));
 }
 
 .bc-stage {
   position: relative;
-  pointer-events: auto;
+  width: 150px;
   cursor: grab;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  filter: drop-shadow(0 6px 14px rgba(20, 24, 40, 0.18));
 }
 
 .bc-root.bc-is-dragging .bc-stage {
   cursor: grabbing;
 }
 
-.bc-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
-}
-
-/* ── idle motion ─────────────────────────────────────────────── */
-.bc-body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: bc-breath calc(2.8s / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-.bc-head {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: bc-bob calc(3.4s / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-.bc-tail {
-  transform-box: fill-box;
-  transform-origin: 6% 92%;
-  animation: bc-tail-sway calc(2.6s / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-.bc-eyes-open {
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-  animation: bc-blink calc(5s / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-@keyframes bc-breath {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.03); }
-}
-
-@keyframes bc-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2.5px); }
-}
-
-@keyframes bc-tail-sway {
-  0%, 100% { transform: rotate(-5deg); }
-  50% { transform: rotate(6deg); }
-}
-
-@keyframes bc-blink {
-  0%, 92%, 100% { transform: scaleY(1); }
-  95% { transform: scaleY(0.08); }
-}
-
-/* ── paw taps ────────────────────────────────────────────────── */
-.bc-paw {
-  transform-box: fill-box;
-  transform-origin: 50% 0%;
-  transition: transform calc(90ms / var(--bc-speed, 1)) ease-out;
-}
-
-.bc-key {
-  transition: fill calc(140ms / var(--bc-speed, 1)) ease-out;
-}
-
-.bc-root.bc-tap-left .bc-paw-left {
-  transform: translateY(13px) rotate(-7deg);
-}
-
-.bc-root.bc-tap-right .bc-paw-right {
-  transform: translateY(13px) rotate(7deg);
-}
-
-.bc-root.bc-tap-both .bc-paw-left {
-  transform: translateY(13px) rotate(-7deg);
-}
-
-.bc-root.bc-tap-both .bc-paw-right {
-  transform: translateY(13px) rotate(7deg);
-}
-
-.bc-root.bc-tap-left .bc-key-l1,
-.bc-root.bc-tap-left .bc-key-l2 {
-  fill: var(--bc-accent);
-}
-
-.bc-root.bc-tap-right .bc-key-r1,
-.bc-root.bc-tap-right .bc-key-r2 {
-  fill: var(--bc-accent);
-}
-
-.bc-root.bc-tap-both .bc-key-l1,
-.bc-root.bc-tap-both .bc-key-l2,
-.bc-root.bc-tap-both .bc-key-r1,
-.bc-root.bc-tap-both .bc-key-r2,
-.bc-root.bc-tap-both .bc-key-space {
-  fill: var(--bc-accent);
-}
-
-/* ── eye states ──────────────────────────────────────────────── */
-.bc-eyes-closed,
-.bc-eyes-freak {
-  display: none;
-}
-
-.bc-root.bc-is-sleeping .bc-eyes-open {
-  display: none;
-}
-
-.bc-root.bc-is-sleeping .bc-eyes-closed {
-  display: inline;
-}
-
-.bc-root.bc-is-freak .bc-eyes-open {
-  display: none;
-}
-
-.bc-root.bc-is-freak .bc-eyes-freak {
-  display: inline;
-}
-
-.bc-root.bc-is-sleeping .bc-body,
-.bc-root.bc-is-sleeping .bc-head,
-.bc-root.bc-is-sleeping .bc-tail {
-  animation-duration: calc(6s / var(--bc-speed, 1));
-}
-
-/* ── decorations (default hidden, gated by data-deco) ────────── */
-.deco,
-.bc-acc {
-  display: none;
-}
-
-.bc-root[data-deco~='stripes'] .deco-stripes,
-.bc-root[data-deco~='stripes'] .deco-tail-stripe,
-.bc-root[data-deco~='patches'] .deco-patch-a,
-.bc-root[data-deco~='patches'] .deco-patch-b,
-.bc-root[data-deco~='chest'] .deco-chest {
-  display: inline;
-}
-
-.bc-root[data-deco~='mask'] .bc-maskable {
-  fill: var(--bc-mask);
-  stroke: var(--bc-mask);
-}
-
-.bc-root[data-deco~='acc-party'] .bc-acc-party,
-.bc-root[data-deco~='acc-witch'] .bc-acc-witch,
-.bc-root[data-deco~='acc-crown'] .bc-acc-crown,
-.bc-root[data-deco~='acc-bowtie'] .bc-acc-bowtie,
-.bc-root[data-deco~='acc-sakura'] .bc-acc-sakura {
-  display: inline;
-}
-
-/* ── freak mode ──────────────────────────────────────────────── */
-.bc-root.bc-is-freak .bc-paw-left {
-  animation: bc-flail-l calc(120ms / var(--bc-speed, 1)) linear infinite alternate;
-  transition: none;
-}
-
-.bc-root.bc-is-freak .bc-paw-right {
-  animation: bc-flail-r calc(120ms / var(--bc-speed, 1)) linear infinite alternate;
-  transition: none;
-}
-
-.bc-root.bc-is-freak .bc-key-l1,
-.bc-root.bc-is-freak .bc-key-l2,
-.bc-root.bc-is-freak .bc-key-r1,
-.bc-root.bc-is-freak .bc-key-r2,
-.bc-root.bc-is-freak .bc-key-space {
-  fill: var(--bc-accent);
-}
-
-@keyframes bc-flail-l {
-  from { transform: translateY(0) rotate(0); }
-  to { transform: translateY(13px) rotate(-9deg); }
-}
-
-@keyframes bc-flail-r {
-  from { transform: translateY(0) rotate(0); }
-  to { transform: translateY(13px) rotate(9deg); }
-}
-
-.bc-sparks {
-  display: none;
-}
-
-.bc-root.bc-is-freak .bc-sparks {
-  display: inline;
-}
-
-.bc-spark {
-  animation: bc-spark-pop calc(520ms / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-.bc-sp2 { animation-delay: 120ms; }
-.bc-sp3 { animation-delay: 240ms; }
-.bc-sp4 { animation-delay: 360ms; }
-
-@keyframes bc-spark-pop {
-  0%, 100% { opacity: 0; transform: scale(0.4); }
-  50% { opacity: 1; transform: scale(1.15); }
-}
-
-.bc-spark {
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-}
-
-/* ── sleep: floating Zzz ─────────────────────────────────────── */
-.bc-zzz {
-  display: none;
-}
-
-.bc-root.bc-is-sleeping .bc-zzz {
-  display: inline;
-}
-
-.bc-z {
-  opacity: 0;
-  animation: bc-zzz-float calc(2.4s / var(--bc-speed, 1)) ease-in-out infinite;
-}
-
-.bc-z2 { animation-delay: 0.8s; }
-.bc-z3 { animation-delay: 1.6s; }
-
-@keyframes bc-zzz-float {
-  0% { opacity: 0; transform: translate(0, 6px); }
-  40% { opacity: 1; }
-  100% { opacity: 0; transform: translate(8px, -16px); }
-}
-
-.bc-z {
-  transform-box: fill-box;
-}
-
-/* ── petting: floating heart ─────────────────────────────────── */
-.bc-heart {
-  display: none;
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-}
-
-.bc-root.bc-is-petting .bc-heart {
-  display: inline;
-  animation: bc-heart-float calc(750ms / var(--bc-speed, 1)) ease-out;
-}
-
-@keyframes bc-heart-float {
-  0% { opacity: 0; transform: translate(130px, 34px) scale(0.4); }
-  25% { opacity: 1; }
-  100% { opacity: 0; transform: translate(130px, -26px) scale(1.5); }
-}
-
-/* ── late night: sleepy palette ──────────────────────────────── */
-.bc-root[data-night] .bc-svg {
-  filter: saturate(0.75) brightness(0.93);
-}
-
-/* ── counter badge ───────────────────────────────────────────── */
-.bc-badge {
-  position: absolute;
-  top: -8px;
-  right: -14px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px 2px 6px;
-  border-radius: 999px;
-  background: rgba(24, 26, 38, 0.78);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  box-shadow: 0 2px 8px rgba(20, 24, 40, 0.25);
-  backdrop-filter: blur(4px);
-}
-
-.bc-badge-drum {
-  font-size: 11px;
-}
-
-.bc-badge-count {
-  font-weight: 600;
-}
-
-/* ── original Steam artwork layer ────────────────────────────── */
+/* ── original artwork frames ─────────────────────────────────── */
 .bc-native {
   display: none;
   position: relative;
@@ -324,10 +37,6 @@
 
 .bc-root.bc-native-mode .bc-native {
   display: block;
-}
-
-.bc-root.bc-native-mode .bc-svg {
-  display: none;
 }
 
 .bc-native-img {
@@ -344,31 +53,75 @@
   display: block;
 }
 
-/* ── custom sprite-sheet skin ────────────────────────────────── */
+/* ── placeholder when no original artwork is available ──────── */
+.bc-empty {
+  display: none;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(24, 26, 38, 0.86);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.bc-root.bc-empty-mode .bc-empty {
+  display: block;
+}
+
+/* ── user-imported sprite strip ──────────────────────────────── */
 .bc-sprite {
   display: none;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 4 / 3;
   background-repeat: no-repeat;
   background-position: 0 50%;
-  image-rendering: auto;
-}
-
-.bc-root.bc-sprite-mode .bc-svg {
-  display: none;
+  background-size: 400% 100%;
 }
 
 .bc-root.bc-sprite-mode .bc-sprite {
   display: block;
 }
 
-/* ── visibility pause (hidden tab: freeze all motion) ─────────── */
-.bc-root.bc-paused .bc-svg,
-.bc-root.bc-paused .bc-svg * {
-  animation-play-state: paused !important;
+.bc-root.bc-sprite-mode .bc-native,
+.bc-root.bc-sprite-mode .bc-empty {
+  display: none;
 }
 
-/* ── first-run hint toast ─────────────────────────────────────── */
+/* ── tap state (frames already convey the hit; class kept for tests) ── */
+.bc-root.bc-tap-left .bc-native,
+.bc-root.bc-tap-right .bc-native,
+.bc-root.bc-tap-both .bc-native {
+  transform: translateY(1px);
+}
+
+/* ── counter badge ───────────────────────────────────────────── */
+.bc-badge {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(24, 26, 38, 0.82);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  pointer-events: none;
+}
+
+.bc-badge-drum {
+  font-size: 10px;
+}
+
+.bc-badge-count {
+  font-weight: 600;
+}
+
+/* ── first-run hint toast ────────────────────────────────────── */
 .bc-toast {
   position: absolute;
   bottom: calc(100% + 10px);
@@ -393,18 +146,7 @@
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ── skin gallery preview ────────────────────────────────────── */
-.bc-preview-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-/* ── accessibility ───────────────────────────────────────────── */
-@media (prefers-reduced-motion: reduce) {
-  .bc-svg *,
-  .bc-spark,
-  .bc-z {
-    animation: none !important;
-  }
+/* hidden tab: freeze anything animated (frames are static, kept for parity) */
+.bc-root.bc-paused {
+  animation-play-state: paused;
 }

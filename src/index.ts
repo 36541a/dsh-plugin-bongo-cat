@@ -728,6 +728,19 @@ export function apply(ctx: Context) {
         return ok(readNativeMeta())
       }
 
+      case 'native/catalog': {
+        const catalog = readJson<{ skins?: Array<{ name?: unknown }> }>(join(nativeDir, 'skins.json'))
+        const skins = (catalog?.skins ?? [])
+          .map((entry) => (typeof entry?.name === 'string' ? entry.name : ''))
+          .filter((name) => name.length > 0)
+        return ok({
+          skins,
+          current: scope.get().skin,
+          stamp: readNativeMeta().extractedAt ?? '',
+          available: readNativeMeta().available
+        })
+      }
+
       case 'native/import': {
         if (!existsSync(extractorPath)) {
           return failInternal(`extractor not found at ${extractorPath}`)
@@ -744,6 +757,11 @@ export function apply(ctx: Context) {
         if (result.status !== 0) {
           return failBadRequest(`提取失败：${result.out.slice(-600) || `exit ${result.status}`}`)
         }
+        // First successful import also builds the icon catalog for the picker.
+        if (!existsSync(join(nativeDir, 'skins.json'))) {
+          await runCommand(python.python, [extractorPath, '--catalog', '--out', nativeDir], 300000)
+        }
+        if (skin !== null) await scope.update({ skin })
         const meta = readNativeMeta()
         if (!meta.available) return failInternal('提取脚本已运行，但未产出完整帧')
         return ok(meta)
@@ -838,6 +856,26 @@ export function apply(ctx: Context) {
         pathname = ''
       }
       const match = /^\/plugins\/bongo-cat\/native\/([a-z-]+)\.png$/.exec(pathname)
+      const iconMatch = /^\/plugins\/bongo-cat\/native\/icons\/([A-Za-z0-9.]+)\.png$/.exec(pathname)
+      if (iconMatch !== null) {
+        const file = join(nativeDir, 'icons', `${iconMatch[1]}.png`)
+        if (!existsSync(file)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end('not found')
+          return
+        }
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Content-Length': String(statSync(file).size),
+          'Cache-Control': 'private, max-age=31536000, immutable'
+        })
+        if (req.method === 'HEAD') {
+          res.end()
+          return
+        }
+        createReadStream(file).pipe(res)
+        return
+      }
       const frame = match === null ? '' : match[1]
       if (!(NATIVE_FRAMES as readonly string[]).includes(frame)) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })

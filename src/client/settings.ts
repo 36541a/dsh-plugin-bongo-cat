@@ -17,19 +17,17 @@ export const BONGO_CAT_NS = 'bongo-cat'
 export type BongoCatKey =
   | 'nav' | 'hint' | 'hintToast'
   | 'enabledLabel'
-  | 'rendererLabel' | 'rendererAuto' | 'rendererNative' | 'rendererSvg'
-  | 'nativeLabel' | 'nativeHint' | 'nativeMissing' | 'nativeReady' | 'nativeImport'
-  | 'nativeReimport' | 'nativeRemove' | 'nativeBusy' | 'nativeFailed' | 'nativeSkin'
-  | 'skinLabel' | 'builtinLabel' | 'customLabel'
-  | 'importSkinButton' | 'removeSkinButton' | 'framesLabel' | 'framesHint'
-  | 'scanButton' | 'scanning' | 'scanEmpty' | 'scanHint'
+  | 'steamSkinsLabel' | 'skinImporting'
+  | 'nativeLabel' | 'nativeHint' | 'nativeMissing' | 'nativeMissingShort' | 'nativeReady' | 'nativeImport'
+  | 'nativeReimport' | 'nativeRemove' | 'nativeBusy' | 'nativeFailed'
+  | 'customLabel' | 'importSkinButton' | 'removeSkinButton' | 'framesLabel' | 'framesHint'
+  | 'scanButton' | 'scanning' | 'scanEmpty'
   | 'soundLabel' | 'soundOnLabel' | 'volumeLabel'
   | 'importSoundButton' | 'removeSoundButton'
   | 'positionLabel' | 'posBR' | 'posBL' | 'posTL' | 'posTR'
   | 'offsetLabel' | 'sizeLabel' | 'speedLabel'
   | 'presetLabel' | 'presetFocus' | 'presetZen' | 'presetParty' | 'presetNight' | 'presetApplied'
   | 'counterLabel' | 'counterReset'
-  | 'eggsLabel' | 'eggFreak' | 'eggSleep' | 'eggPet' | 'eggNight'
   | 'loading' | 'unavailable' | 'remoteWarning' | 'tooLarge' | 'busy'
 
 /** Status of the extracted original (Steam) artwork. */
@@ -45,6 +43,11 @@ export interface NativeStatus {
 /** Cache-busted URL of an extracted native frame. */
 export function nativeFrameUrl(frame: 'idle' | 'tap-left' | 'tap-right', stamp: string): string {
   return `/plugins/bongo-cat/native/${frame}.png?v=${encodeURIComponent(stamp)}`
+}
+
+/** Cache-busted URL of a Steam skin icon. */
+export function nativeIconUrl(name: string, stamp: string): string {
+  return `/plugins/bongo-cat/native/icons/${encodeURIComponent(name)}.png?v=${encodeURIComponent(stamp)}`
 }
 
 /** Structural mirror of the host RpcResult envelope. */

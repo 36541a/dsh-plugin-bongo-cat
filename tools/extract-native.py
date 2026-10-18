@@ -239,6 +239,44 @@ ORIGIN_BOX = {
 }
 
 
+def export_catalog(assets: Path, out: Path, max_icon: int = 128) -> dict:
+    """Export one icon per skin so the plugin can offer a picker."""
+    env = UnityPy.load(str(assets))
+    sprites = {}
+    for obj in env.objects:
+        if obj.type.name != "Sprite":
+            continue
+        sprite = obj.read()
+        sprites[getattr(sprite, "m_Name", "")] = sprite
+
+    names = set()
+    for name in sprites:
+        match = re.match(r"^(.+?)Left$", name)
+        if match and not match.group(1).startswith("DefaultBongo"):
+            names.add(match.group(1))
+
+    icon_dir = out / "icons"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    items = []
+    for name in sorted(names):
+        sprite = sprites.get(f"{name}Icon") or sprites.get(f"{name}Left")
+        if sprite is None:
+            continue
+        image = sprite.image.convert("RGBA")
+        scale = min(1.0, max_icon / max(image.width, image.height))
+        if scale < 1.0:
+            image = image.resize(
+                (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                Image.LANCZOS,
+            )
+        image.save(icon_dir / f"{name}.png")
+        items.append({"name": name})
+
+    meta = {"skins": items, "count": len(items)}
+    (out / "skins.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return meta
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract original Bongo Cat frames for dsh-plugin-bongo-cat")
     parser.add_argument("--out", help="output directory (plugin native storage)")
@@ -247,6 +285,7 @@ def main() -> None:
     parser.add_argument("--scale", type=int, default=3, help="pixel scale (default 3)")
     parser.add_argument("--list", action="store_true", help="list installed skins and exit")
     parser.add_argument("--with-drums", action="store_true", help="include the bongo drums (default: cat only)")
+    parser.add_argument("--catalog", action="store_true", help="export skin icons + skins.json and exit")
     args = parser.parse_args()
 
     game = find_game(args.game)
@@ -257,6 +296,11 @@ def main() -> None:
         return
     if not args.out:
         raise SystemExit("--out is required (or use --list)")
+
+    if args.catalog:
+        meta = export_catalog(assets, Path(args.out))
+        print(json.dumps({"ok": True, "catalog": meta["count"]}, ensure_ascii=False))
+        return
 
     skin = args.skin
     if skin.startswith("DefaultBongo"):
