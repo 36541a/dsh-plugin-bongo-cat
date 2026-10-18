@@ -1,9 +1,10 @@
 /**
  * dsh-plugin-bongo-cat build: esbuild produces both halves.
  *
- *  - lib/index.js  (host): bundled ESM node plugin; only @deepseek-ai
- *    packages we value-import are external (schemastery stays a real
- *    dependency, matching the published-plugin convention).
+ *  - lib/index.js  (host): bundled ESM node plugin. It has no runtime
+ *    dependencies of its own (settings live in a JSON file), so nothing
+ *    needs to stay external; the external list is kept for the cordis
+ *    service modules that may be value-imported later.
  *  - lib/client.js (browser): CommonJS body wrapped in the web module
  *    protocol the shell's module loader consumes:
  *
@@ -115,8 +116,8 @@ const cssModulePlugin = {
 
 await mkdir(path.join(ROOT, 'lib'), { recursive: true })
 
-// Host half: plain ESM node bundle. schemastery stays external (real
-// runtime dependency); cordis and every dsh service type is types-only.
+// Host half: plain ESM node bundle. The plugin carries no runtime
+// dependencies; cordis service modules stay external if ever imported.
 await build({
   entryPoints: [path.join(ROOT, 'src/index.ts')],
   outfile: path.join(ROOT, 'lib/index.js'),
@@ -124,7 +125,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  external: ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'],
+  external: ['@deepseek-ai/cordis', '@deepseek-ai/cosmokit'],
   logLevel: 'info'
 })
 

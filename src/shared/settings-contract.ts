@@ -5,8 +5,9 @@
  *
  * One file defines keys, defaults, ranges and enums. BOTH halves derive
  * from it:
- *   - host (src/index.ts) builds the schemastery schema from these
- *     defaults and validates config/set patches with sanitizeSettingsPatch;
+ *   - host (src/index.ts) seeds its JSON settings store from
+ *     SETTINGS_DEFAULTS and validates every config/set patch with
+ *     sanitizeSettingsPatch;
  *   - browser (src/client/settings.ts) re-exports the derived
  *     BongoCatSettings type; the store's coalescing writer speaks the
  *     same shapes.
@@ -17,15 +18,15 @@
  * a field added on one side only is dropped on the other, and the user
  * symptom is "my setting does not stick" with no error anywhere.
  *
- * HARD CONSTRAINT (the reference project's browser-safety rule, and the
- * reason buildSettingsSchema lives in src/index.ts instead of here):
- * this file is imported by the BROWSER half, so it must be free of
- * VALUE imports — no node builtins, no @deepseek-ai packages, no
- * top-level side effects. Type-only imports are fine (erased at build).
- * If you need schemastery here, the design is wrong.
+ * HARD CONSTRAINT (the reference project's browser-safety rule): this
+ * file is imported by the BROWSER half, so it must be free of VALUE
+ * imports — no node builtins, no @deepseek-ai packages, no top-level
+ * side effects. Type-only imports are fine (erased at build). Anything
+ * that needs a real module (a schema builder, a validator with
+ * dependencies) belongs in src/index.ts on the host side.
  *
- * Adding a field: add it here. The host schema, the client type, the
- * settings panel and the sanitizer all follow automatically. Do NOT
+ * Adding a field: add it here. The host defaults, the sanitizer, the
+ * client type and the settings panel all follow automatically. Do NOT
  * hand-write a parallel list anywhere else.
  */
 
