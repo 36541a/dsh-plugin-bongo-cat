@@ -314,7 +314,7 @@ export function apply(ctx: ClientContext) {
 ### 5.6 输入监听与节流
 
 - `keydown`（window）：忽略 `repeat` 与 Ctrl/Meta/Alt 组合键与 Shift/CapsLock——组合快捷键不该算作敲击；其余按键左右爪交替；
-- `pointerdown`（document，capture）：左键且不点在猫自身上 → 双爪齐敲。点击 UI 也敲，这正是 Bongo Cat 的魅力；
+- `pointerdown`（document，capture）：左键且不点在猫自身上 → 与键盘共用同一条左右交替序列，接着拍下一只爪（游戏本身也只有单爪的 `CatHitLeft` / `CatHitRight`）。点击 UI 也敲，这正是 Bongo Cat 的魅力；
 - 音效内置 40ms 节流；精灵图模式下敲击循环第 1/2/3 帧、停顿 700ms 回待机帧。
 
 ### 5.7 拖拽与角落吸附
@@ -338,7 +338,7 @@ export function apply(ctx: ClientContext) {
 dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口失焦**的暂停做了精细区分（桌面壳失焦时壁纸仍可见，暂停会定格可见画面，故只在原生浏览器目标下启用）。桌宠迁用的是其中**语义无歧义**的子集——页面可见性：
 
 - `visibilitychange` → 隐藏时：根节点加 `bc-paused`（CSS `animation-play-state: paused` 冻结全部动画）、`BongoSound.suspend()` 挂起 AudioContext、`slap()` 直接忽略输入、休眠计时器停跑；
-- 恢复时：解除冻结、`resume()`、**重置空闲计时**（不会在回到页面的瞬间误触发打瞌睡）。
+- 恢复时：解除冻结、`resume()`、**重置空闲计时**（不会在回到页面的瞬间误触发动画切换）。
 
 ### 5.12 心情预置（v0.2.0，借鉴预设全快照）
 
@@ -407,14 +407,14 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 导入一张**横向等宽帧条** PNG：
 
 ```
-┌────┬────┬────┬────┐
-│ 1  │ 2  │ 3  │ 4  │  …（2–12 帧，帧数在设置里调）
-└────┴────┴────┴────┘
- 待机  左爪  右爪  双爪
+┌────┬────┬────┐
+│ 1  │ 2  │ 3  │  …（2–12 帧，帧数在设置里调）
+└────┴────┴────┘
+ 待机  左爪  右爪
 ```
 
 - 每帧正方形（建议 512×512，透明背景 PNG）；
-- 第 1 帧待机；第 2/3 帧左/右爪敲击；第 4 帧双爪；多余帧在敲击时依次循环；
+- 第 1 帧待机；第 2/3 帧左/右爪敲击；多余帧在敲击时依次循环；
 - 其他键盘 / 鼠标动作复用同一套帧序；
 - 导入后 `customSkinFrames` 与条带帧数一致即可，改帧数滑块无需重新导入。
 
@@ -450,13 +450,12 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 ### 8.2 settings 字段表
 
-命名空间 `bongo-cat`，持久化于 `$DSH_HOME/settings.yaml`。
+命名空间 `bongo-cat`，持久化于 `$DSH_HOME/storages/bongo-cat/settings.json`。
 
 | 字段 | 类型 | 默认 | 范围 / 说明 |
 |---|---|---|---|
 | `enabled` | boolean | `true` | 总开关 |
-| `renderer` | enum | `auto` | `auto` / `native` / `svg`：自动优先原版美术 |
-| `skin` | string | `Cat` | Steam 皮肤名（精灵前缀），`/^[A-Za-z0-9.]{1,64}$/` |
+| `skin` | string | `Cat` | Steam 皮肤名（精灵前缀），`/^[A-Za-z0-9.]{1,64}$/`；不在皮肤目录里的值会回退到默认 |
 | `customSkinRevision` | natural | `0` | 自定义皮肤 revision，0 = 无 |
 | `customSkinFrames` | natural | `4` | 精灵图帧数 2–12 |
 | `size` | number | `1.2` | 缩放 0.5–3 |
@@ -502,7 +501,7 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 - **写入仅 loopback**：导入类 RPC 只应来自本机页面；path 类导入额外要求位于扫描根内。
 - **游戏目录零写入**：扫描与导入全程只读 Bongo Cat 安装 / 创意工坊目录。
 - **无遥测**：不采集、不上传任何会话或用户数据；计数只落在本机 `$DSH_HOME`。
-- **注入面**：browser 半只向 `document.body` 追加一个 overlay 与 `<style data-plugin-css>`，不拦截、不改写 DSH 自身 DOM；所有 SVG 均为插件内置常量，用户导入的只是图片 URL。
+- **注入面**：browser 半只向 `document.body` 追加一个 overlay 与 `<style data-plugin-css>`，不拦截、不改写 DSH 自身 DOM；原生帧与皮肤图标都由 host 从本机游戏资源提取后按 URL 提供。
 
 ---
 
