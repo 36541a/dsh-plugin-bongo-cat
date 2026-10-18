@@ -294,7 +294,6 @@ def compose(
     return cropped
 
 
-# box origin lookup keyed by the internal keys used by art()
 # Box origin lookup keyed by the internal keys used by art(). The right-paw
 # entries are placeholders: art() swaps in ORIGIN["paw"] or ORIGIN["paw_drum"]
 # depending on whether the drums are present.
