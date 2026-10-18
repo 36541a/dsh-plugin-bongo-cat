@@ -12,3 +12,4 @@
 # GitHub checkout then needs no build step, so pnpm's allowBuilds gate never
 # gets in the way. Rebuild before committing (`pnpm build`); `pnpm verify`
 # fails when lib/ is older than src/.
+.verify/tools/
