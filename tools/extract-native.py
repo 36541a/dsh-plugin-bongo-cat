@@ -56,9 +56,6 @@ DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
 # How far the right paw drops on a tap when no drum hides it (sprite pixels).
 PAW_DROP = 8
-# Without drums the paw is drawn BEHIND the body and sunk so only the part
-# below the body silhouette shows — it reads as a paw hanging over an edge.
-PAW_SINK = 36
 
 
 # ----------------------------------------------------------------------
@@ -162,6 +159,9 @@ def compose(
     def art(key: str):
         img, (rx, ry, rw, rh) = sprites[key]
         img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        # The right paw keeps its authored origin in both modes: in the game it
+        # rests on the drum, and without the drum the same spot reads as the paw
+        # resting at the body's lower-right edge.
         x = ORIGIN_BOX[key][0] + rx
         y = ORIGIN_BOX[key][1] + (256 - ry - rh)
         return img, x * scale, y * scale
@@ -191,24 +191,18 @@ def compose(
                 px = int(cx - (pb[0] + pb[2]) / 2)
                 py = int(base_y - pb[3])
                 canvas.alpha_composite(p_img, (px, py))
-        if not with_drums:
-            # Paw first (behind the body), sunk so its lower half peeks out.
-            paw, px, py = art("CatRight")
-            paw_sink = PAW_SINK + (PAW_DROP if right_punch else 0)
-            canvas.alpha_composite(paw, (int(px), int(py + paw_sink * scale)))
-
         img, x, y = art(cat_key)
         canvas.alpha_composite(img, (int(x), int(y)))
 
-        if not with_drums:
-            # No drum to hide the paw, and the authored impact swoosh reads as
-            # a broken outline without it — a plain downward paw press is
-            # cleaner and still reads as the same tap.
-            if right_punch:
-                pass
-        else:
+        if with_drums:
             img, x, y = art(paw_key)
             canvas.alpha_composite(img, (int(x), int(y)))
+        else:
+            # Mirror the left paw: same height, resting at the body's right edge.
+            paw, px, py = art("CatRight")
+            if right_punch:
+                py += PAW_DROP * scale
+            canvas.alpha_composite(paw, (int(px), int(py)))
         return canvas
 
     frames = {
