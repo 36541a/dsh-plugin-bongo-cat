@@ -54,7 +54,7 @@ dsh plugin --profile web add github:36541a/dsh-plugin-bongo-cat      # 可加 #s
 dsh plugin --profile web remove dsh-plugin-bongo-cat
 ```
 
-`prepare` 脚本会在安装时自动执行 `node scripts/build.mjs`，因此 GitHub 安装无需预先构建。
+`lib/` 产物**随仓库发布**（`prepack` 在打包时重建），GitHub 安装无需预先构建；开发时改完源码要 `pnpm build` 并在同一提交里带上产物——硬档守卫会检查产物是否比源码新。
 
 ---
 
@@ -366,7 +366,7 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 | `lib/index.js` | node / ESM | 直接 bundle | `@deepseek-ai/schemastery`（真实依赖）、`cosmokit` |
 | `lib/client.js` | browser / CJS | ModuleLoader 包裹 | `PLATFORM_MODULES` + `dsh.client.inject` 声明包 |
 
-CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` 注入）。`prepare` 脚本 = build，GitHub 安装即装即构建。
+CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` 注入）。`prepack` = `node scripts/build.mjs`（打包/发布前重建）；`prepare` 已移除——安装期不跑任何脚本，git 直装在 pnpm 10+ 也不会被 `allowBuilds` 拦。
 
 `pnpm typecheck`（`tsc --noEmit`）需要 DSH 的 `@deepseek-ai/*` 包作为 devDependencies——在 DSH 源码检出内或配置了对应 registry 后运行；打包验证只需 `pnpm build`。
 

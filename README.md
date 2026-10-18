@@ -26,7 +26,7 @@
 
 需要 DeepSeek Harness 的 **web profile**（Node.js ≥ 22）。
 
-从 GitHub 安装（`prepare` 脚本会在安装时自动构建）：
+从 GitHub 安装（仓库自带 `lib/` 构建产物，装完即用，无需构建）：
 
 ```sh
 dsh plugin --profile web add github:36541a/dsh-plugin-bongo-cat
@@ -43,7 +43,7 @@ dsh plugin --profile web add link:./dsh-plugin-bongo-cat
 
 安装后重启 `dsh web`（插件在启动时加载），刷新页面，打开 **Settings（设置）→ 邦哥猫**。
 
-> **pnpm ≥ 10 注意**：pnpm 10 起默认拒绝未声明 `allowBuilds` 的安装脚本，`github:` 直装时 `prepare`（安装期构建）会被拒。把安装输出里的 package key 复制到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 块后重试；或直接用本地 zip / npm 包安装（二者都自带预构建产物，安装期不跑任何脚本）。
+> **为什么不用跑安装脚本**：`lib/index.js` 与 `lib/client.js` 随仓库一起发布，`github:` 直装不执行任何 install 脚本，因此 pnpm 10+ 的 `allowBuilds` 闸不会拦你。开发时改完源码记得 `pnpm build` 再提交（`pnpm verify` 会检查产物是否比源码新）。
 
 卸载：
 
