@@ -70,7 +70,7 @@ dsh plugin --profile web remove dsh-plugin-bongo-cat
 3. 首次会自动准备运行环境：在 `storages/bongo-cat/pyenv` 建一个插件私有 venv 并安装 UnityPy（约 50 MB，需要联网，1 分钟左右），不会动你系统里的 Python
 4. 完成后立即生效：`$DSH_HOME/storages/bongo-cat/native/` 下生成 `idle.png` / `tap-left.png` / `tap-right.png`（1020×750）
 
-提取器做的事：定位 Steam 库 → 读取 `BongoCat_Data/sharedassets0.assets` → 取出 `<Skin>Left / Right / LeftPunch / RightPunch` 与双鼓精灵 → 按精灵 `textureRect` 与原版图层坐标合成 → 输出三帧。换皮肤：`python tools/extract-native.py --list` 可列出全部 244 个皮肤，`--skin Black` 这类参数可提取指定皮肤。
+提取器做的事：定位 Steam 库 → 读取 `BongoCat_Data/sharedassets0.assets` → 取出 `<Skin>Left / Right / LeftPunch / RightPunch` → 按精灵 `textureRect` 与原版图层坐标合成 → 输出三帧。**默认只画猫（不含手鼓）**，右爪从身体下缘露出；想要原版"双鼓"构图可加 `--with-drums`。换皮肤：`python tools/extract-native.py --list` 可列出全部 244 个皮肤，`--skin Black` 这类参数可提取指定皮肤。
 
 **版权说明**：美术资源版权归 Bongo Cat 作者所有。插件仓库、npm 包与 zip **都不包含任何游戏图像**；提取只在你的机器上运行，产物只写入本机 DSH 数据目录，用于个人显示。
 

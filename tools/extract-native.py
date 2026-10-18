@@ -54,6 +54,12 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
+# How far the right paw drops on a tap when no drum hides it (sprite pixels).
+PAW_DROP = 8
+# Without drums the paw is drawn BEHIND the body and sunk so only the part
+# below the body silhouette shows — it reads as a paw hanging over an edge.
+PAW_SINK = 36
+
 
 # ----------------------------------------------------------------------
 # game discovery
@@ -151,6 +157,7 @@ def compose(
     sprites: dict[str, tuple[Image.Image, tuple[float, float, float, float]]],
     skin: str,
     scale: int,
+    with_drums: bool = False,
 ) -> dict[str, Image.Image]:
     def art(key: str):
         img, (rx, ry, rw, rh) = sprites[key]
@@ -167,33 +174,62 @@ def compose(
     def frame(cat_key: str, paw_key: str, left_punch: bool, right_punch: bool) -> Image.Image:
         canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         # drums first (they sit behind the paws), punch variants aligned by base
-        for side, idle_key, punch_key, punch in (
-            ("bongo_left", "BongoL", "BongoLP", left_punch),
-            ("bongo_right", "BongoR", "BongoRP", right_punch),
-        ):
-            img, x, y = art(idle_key)
-            if not punch:
-                canvas.alpha_composite(img, (int(x), int(y)))
-                continue
-            bb = bbox(img)
-            cx = x + (bb[0] + bb[2]) / 2
-            base_y = y + bb[3]
-            p_img, _, _ = art(punch_key)
-            pb = bbox(p_img)
-            px = int(cx - (pb[0] + pb[2]) / 2)
-            py = int(base_y - pb[3])
-            canvas.alpha_composite(p_img, (px, py))
+        if with_drums:
+            for side, idle_key, punch_key, punch in (
+                ("bongo_left", "BongoL", "BongoLP", left_punch),
+                ("bongo_right", "BongoR", "BongoRP", right_punch),
+            ):
+                img, x, y = art(idle_key)
+                if not punch:
+                    canvas.alpha_composite(img, (int(x), int(y)))
+                    continue
+                bb = bbox(img)
+                cx = x + (bb[0] + bb[2]) / 2
+                base_y = y + bb[3]
+                p_img, _, _ = art(punch_key)
+                pb = bbox(p_img)
+                px = int(cx - (pb[0] + pb[2]) / 2)
+                py = int(base_y - pb[3])
+                canvas.alpha_composite(p_img, (px, py))
+        if not with_drums:
+            # Paw first (behind the body), sunk so its lower half peeks out.
+            paw, px, py = art("CatRight")
+            paw_sink = PAW_SINK + (PAW_DROP if right_punch else 0)
+            canvas.alpha_composite(paw, (int(px), int(py + paw_sink * scale)))
+
         img, x, y = art(cat_key)
         canvas.alpha_composite(img, (int(x), int(y)))
-        img, x, y = art(paw_key)
-        canvas.alpha_composite(img, (int(x), int(y)))
+
+        if not with_drums:
+            # No drum to hide the paw, and the authored impact swoosh reads as
+            # a broken outline without it — a plain downward paw press is
+            # cleaner and still reads as the same tap.
+            if right_punch:
+                pass
+        else:
+            img, x, y = art(paw_key)
+            canvas.alpha_composite(img, (int(x), int(y)))
         return canvas
 
-    return {
+    frames = {
         "idle": frame("CatLeft", "CatRight", False, False),
         "tap-left": frame("CatLeftPunch", "CatRight", True, False),
         "tap-right": frame("CatLeft", "CatRightPunch", False, True),
     }
+    if with_drums:
+        return frames
+    # Cat-only frames: crop to content (+ a small margin) so the overlay is tight.
+    cropped: dict[str, Image.Image] = {}
+    boxes = [img.getbbox() or (0, 0, img.width, img.height) for img in frames.values()]
+    left = min(b[0] for b in boxes)
+    top = min(b[1] for b in boxes)
+    right = max(b[2] for b in boxes)
+    bottom = max(b[3] for b in boxes)
+    pad = 8 * scale
+    box = (max(0, left - pad), max(0, top - pad), min(w, right + pad), min(h, bottom + pad))
+    for name, img in frames.items():
+        cropped[name] = img.crop(box)
+    return cropped
 
 
 # box origin lookup keyed by the internal keys used by art()
@@ -216,6 +252,7 @@ def main() -> None:
     parser.add_argument("--skin", default="Cat", help="skin name (see --list; the game ships 244 skins)")
     parser.add_argument("--scale", type=int, default=3, help="pixel scale (default 3)")
     parser.add_argument("--list", action="store_true", help="list installed skins and exit")
+    parser.add_argument("--with-drums", action="store_true", help="include the bongo drums (default: cat only)")
     args = parser.parse_args()
 
     game = find_game(args.game)
@@ -230,8 +267,9 @@ def main() -> None:
     skin = args.skin
     if skin.startswith("DefaultBongo"):
         raise SystemExit("DefaultBongo* are the drums, not a cat skin. Try --skin Cat")
-    wanted = {f"{skin}Left", f"{skin}LeftPunch", f"{skin}Right", f"{skin}RightPunch",
-              f"{DRUMS[0]}", f"{DRUMS[0]}Punch", f"{DRUMS[1]}", f"{DRUMS[1]}Punch"}
+    wanted = {f"{skin}Left", f"{skin}LeftPunch", f"{skin}Right", f"{skin}RightPunch"}
+    if args.with_drums:
+        wanted |= {f"{DRUMS[0]}", f"{DRUMS[0]}Punch", f"{DRUMS[1]}", f"{DRUMS[1]}Punch"}
     raw = load_sprites(assets, wanted)
     missing = wanted - set(raw)
     if missing:
@@ -242,14 +280,17 @@ def main() -> None:
         "CatLeftPunch": f"{skin}LeftPunch",
         "CatRight": f"{skin}Right",
         "CatRightPunch": f"{skin}RightPunch",
-        "BongoL": DRUMS[0],
-        "BongoLP": f"{DRUMS[0]}Punch",
-        "BongoR": DRUMS[1],
-        "BongoRP": f"{DRUMS[1]}Punch",
     }
+    if args.with_drums:
+        keymap |= {
+            "BongoL": DRUMS[0],
+            "BongoLP": f"{DRUMS[0]}Punch",
+            "BongoR": DRUMS[1],
+            "BongoRP": f"{DRUMS[1]}Punch",
+        }
     sprites = {k: raw[v] for k, v in keymap.items()}
 
-    frames = compose(sprites, skin, max(1, min(6, args.scale)))
+    frames = compose(sprites, skin, max(1, min(6, args.scale)), with_drums=args.with_drums)
 
     # sanity: the cat must occupy the middle band of the frame
     idle = frames["idle"]
@@ -268,6 +309,7 @@ def main() -> None:
         "appId": APP_ID,
         "skin": skin,
         "scale": max(1, min(6, args.scale)),
+        "drums": bool(args.with_drums),
         "frames": {name: f"{name}.png" for name in frames},
         "size": list(frames["idle"].size),
         "gameDir": str(game),
