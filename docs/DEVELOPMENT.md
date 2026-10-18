@@ -349,7 +349,7 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
 
 - 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 777×501 的 `idle / tap-left / tap-right`。`--catalog` 另导出每套皮肤的 `<Skin>Icon`（243 张）与 `skins.json`。
-- 合成规则（v0.4.2 起默认**不含手鼓**）：身体先画、右爪后画（与游戏图层一致），右爪用**作者原坐标**——游戏里它搭在鼓上，去掉鼓后正好落在身体右下沿；打击帧把右爪再下压 8px，不再叠原版打击弧线（那条线服务于"爪子藏到鼓后"，单独存在像断爪）。`--with-drums` 可恢复双鼓构图。
+- 合成规则（v0.4.2 起默认**不含手鼓**）：身体先画、右爪后画（与游戏图层一致），右爪用**作者原坐标**（与身体同一 256 画布原点，即 `CatIcon` 的对称姿态）。右击帧：`<Skin>RightPunch` 其实只是冲击特效（弧线+短线），游戏是在运行时**旋转右爪节点**，所以提取器自己把右爪绕腕部（爪精灵左下 45%,92% 处）顺时针摆 50°——腕部钉在原位保持与身体相连，冲击短线落在爪尖右下方，与左拍的"爪子拍下去"对称；`--with-drums` 时改用游戏原版构图（爪子压在鼓上 + 原版打击帧）。
 - 裁切：无鼓模式按三帧内容的并集包围盒裁切（+8px 边距），产物约 777×588。
 - 服务（host）：`native/status` 校验 `native.json` + 三张帧是否齐全；`native/import` 先解析解释器——已有 `storages/bongo-cat/pyenv` 就直接用；否则找 `DSH_BC_PYTHON` / `python` / `python3` / `py -3` / `%LOCALAPPDATA%\Programs\Python\Python3*` / `%PROGRAMFILES%\Python3*`，哪个能 `import UnityPy, PIL` 就用哪个；都没有时用任一可用 Python **建插件私有 venv 并 `pip install UnityPy`**（约 26 秒，不改动系统环境），再执行提取器。静态路由 `/plugins/bongo-cat/native/*.png` 只认三个白名单帧名。
 - 渲染（client）：`cat.ts` 预创建三张 `<img>` 叠放，根节点 `bc-native-mode` 显示图片层；`data-active` 切帧，敲击 130ms 后回 `idle`。没有原版资源时显示 `bc-empty-mode` 提示；自定义精灵图作为可选覆盖。

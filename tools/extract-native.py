@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -63,10 +64,15 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
-# How far the right paw presses down on a right tap (sprite pixels). The
-# game moves the paw onto the drum; without a drum a short press plus the
-# authored impact dashes reads as the same hit.
-PAW_DROP = 12
+# Right-tap swing. CatRightPunch is only the impact effect (arc + dashes) —
+# the game rotates the paw NODE at runtime, so no sprite holds the "paw down"
+# pose. Produce it here: swing the paw around its wrist, pinning the wrist so
+# the paw stays attached to the body, and drop the impact dashes past the tip.
+# Pivot/tip are fractions of the paw sprite so every skin swings the same way.
+PAW_SWING_DEG = -50.0
+PAW_PIVOT_FRAC = (0.45, 0.92)   # the wrist: lower-left of the paw sprite
+PAW_TIP_FRAC = (0.55, 0.08)     # the paw's upper corner
+DASH_FROM_TIP = (34, 52)        # dash centroid, unscaled canvas px past the tip
 # Connected components smaller than this are the impact dashes; anything
 # larger is the swoosh, which only makes sense against a drum.
 DASH_MAX_AREA = 400
@@ -210,6 +216,53 @@ def impact_dashes(img: Image.Image) -> Image.Image:
     return out
 
 
+def alpha_centroid(img: Image.Image) -> tuple[float, float]:
+    """Alpha-weighted centroid of a sprite, in its own pixels."""
+    total = 0.0
+    sx = sy = 0.0
+    for y in range(img.height):
+        for x in range(img.width):
+            a = img.getpixel((x, y))[3]
+            total += a
+            sx += a * x
+            sy += a * y
+    if total == 0:
+        return (img.width / 2, img.height / 2)
+    return (sx / total, sy / total)
+
+
+def rotate_about(img: Image.Image, angle_deg: float, pivot: tuple[float, float]):
+    """Rotate img visually counter-clockwise around pivot (img pixels).
+
+    Uses an explicit affine map instead of Image.rotate(expand=True): where
+    the pivot lands in the output is part of the contract here, and PIL's
+    expand offset conventions are not. Returns (image, forward) where
+    forward(point) maps an input pixel to its output position.
+    """
+    th = math.radians(angle_deg)
+    w, h = img.size
+    size = int(math.ceil(math.hypot(w, h))) + 4
+    origin = (size / 2, size / 2)
+    center = (w / 2, h / 2)
+    cos_t, sin_t = math.cos(th), math.sin(th)
+    # output q -> input p: p = center + R^-1 (q - origin),
+    # R = [[cos, sin], [-sin, cos]] (counter-clockwise in y-down coords).
+    coeffs = (
+        cos_t, -sin_t, center[0] - (cos_t * origin[0] - sin_t * origin[1]),
+        sin_t, cos_t, center[1] - (sin_t * origin[0] + cos_t * origin[1]),
+    )
+    out = img.transform((size, size), Image.AFFINE, coeffs, resample=Image.BICUBIC)
+
+    def forward(point: tuple[float, float]) -> tuple[float, float]:
+        rel = (point[0] - center[0], point[1] - center[1])
+        return (
+            origin[0] + cos_t * rel[0] + sin_t * rel[1],
+            origin[1] - sin_t * rel[0] + cos_t * rel[1],
+        )
+
+    return out, forward
+
+
 def compose(
     sprites: dict[str, tuple[Image.Image, tuple[float, float, float, float]]],
     skin: str,
@@ -221,15 +274,43 @@ def compose(
         # Only the small strokes; the arc needs a drum behind it to make sense.
         parts["Dashes"] = (impact_dashes(sprites["CatRightPunch"][0]), sprites["CatRightPunch"][1])
 
-    def art(key: str, drop: int = 0):
+    def art(key: str):
         img, (rx, ry, rw, rh) = parts[key]
         img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
         origin = ORIGIN_BOX.get(key, ORIGIN["paw"])
         if key in ("CatRight", "CatRightPunch", "Dashes"):
             origin = ORIGIN["paw_drum"] if with_drums else ORIGIN["paw"]
         x = origin[0] + rx
-        y = origin[1] + (256 - ry - rh) + drop
+        y = origin[1] + (256 - ry - rh)
         return img, x * scale, y * scale
+
+    def swing(canvas: Image.Image) -> None:
+        """Right hit: rotate the paw down around its wrist, dashes past the tip.
+
+        The game swings the paw NODE at runtime — <Skin>RightPunch is only the
+        impact effect — so the down pose has to be produced here. The wrist
+        stays at its idle spot, the palm swings out to the right, and the
+        impact dashes land just past the tip, mirroring the left punch's read.
+        """
+        paw_img, (rx, ry, rw, rh) = parts["CatRight"]
+        big = paw_img.resize((paw_img.width * scale, paw_img.height * scale), Image.LANCZOS)
+        base = (ORIGIN["paw"][0] + rx, ORIGIN["paw"][1] + (256 - ry - rh))
+        pivot = (rw * PAW_PIVOT_FRAC[0] * scale, rh * PAW_PIVOT_FRAC[1] * scale)
+        swung, forward = rotate_about(big, PAW_SWING_DEG, pivot)
+        where = forward(pivot)
+        target = ((base[0] + rw * PAW_PIVOT_FRAC[0]) * scale, (base[1] + rh * PAW_PIVOT_FRAC[1]) * scale)
+        canvas.alpha_composite(swung, (int(round(target[0] - where[0])), int(round(target[1] - where[1]))))
+        # the tip travels with the paw; drop the dashes just past it
+        tip_out = forward((rw * PAW_TIP_FRAC[0] * scale, rh * PAW_TIP_FRAC[1] * scale))
+        tip_canvas = (target[0] - where[0] + tip_out[0], target[1] - where[1] + tip_out[1])
+        dash_img, _ = parts["Dashes"]
+        dash_big = dash_img.resize((dash_img.width * scale, dash_img.height * scale), Image.LANCZOS)
+        cx, cy = alpha_centroid(dash_img)
+        dash_pos = (
+            tip_canvas[0] + DASH_FROM_TIP[0] * scale - cx * scale,
+            tip_canvas[1] + DASH_FROM_TIP[1] * scale - cy * scale,
+        )
+        canvas.alpha_composite(dash_big, (int(round(dash_pos[0])), int(round(dash_pos[1]))))
 
     def bbox(img):
         return img.getbbox() or (0, 0, img.width, img.height)
@@ -263,11 +344,7 @@ def compose(
             img, x, y = art("CatRightPunch" if right_punch else "CatRight")
             canvas.alpha_composite(img, (int(x), int(y)))
         elif right_punch:
-            # Right paw presses down, with the authored impact dashes.
-            img, x, y = art("CatRight", PAW_DROP)
-            canvas.alpha_composite(img, (int(x), int(y)))
-            img, x, y = art("Dashes", PAW_DROP)
-            canvas.alpha_composite(img, (int(x), int(y)))
+            swing(canvas)
         else:
             img, x, y = art("CatRight")
             canvas.alpha_composite(img, (int(x), int(y)))
