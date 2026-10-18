@@ -93,15 +93,23 @@ function runSmoke(name) {
 }
 
 function checkContractDrift() {
-  // The host smoke test asserts host schema defaults == contract defaults
-  // on every run; here we only verify the contract probe builds, so a
-  // syntax error in the single source of truth can never pass silently.
-  const probe = path.join(VERIFY_DIR, 'lib', 'contract.js')
-  if (!existsSync(probe)) {
-    hardFail('contract probe built', 'run pnpm build && node .verify/build-contract.mjs')
+  // Build the probe first: `.verify/lib/` is gitignored, so a clean checkout
+  // (CI) has no probe until something builds it. The smoke tests do that on
+  // import, but this check runs before them.
+  const built = spawnSync(process.execPath, [path.join(VERIFY_DIR, 'build-contract.mjs')], {
+    cwd: VERIFY_DIR,
+    stdio: 'inherit'
+  })
+  if (built.status !== 0) {
+    hardFail('contract probe builds', 'esbuild failed on src/shared/settings-contract.ts')
     return
   }
-  ok('contract probe built (drift assertions live in host-smoke)')
+  const probe = path.join(VERIFY_DIR, 'lib', 'contract.js')
+  if (!existsSync(probe)) {
+    hardFail('contract probe built', 'build-contract.mjs reported success but produced nothing')
+    return
+  }
+  ok('contract probe builds (drift assertions live in host-smoke)')
 }
 
 /**
