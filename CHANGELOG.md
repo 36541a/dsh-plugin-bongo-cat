@@ -2,11 +2,12 @@
 
 ## 0.4.4 — 2026-10-19
 
-- 修复干净检出下  必红：硬档先构建契约探针（ 被 gitignore，CI 上没有缓存）
+- 修复干净检出下 `pnpm verify` 必红：硬档改为先构建契约探针（`.verify/lib/` 被 gitignore，CI 上没有缓存）
+- 补充 `pnpm lint` 在 CI 上通过所需的运行顺序（verify 绿后才会执行）
 
 ## 0.4.3 — 2026-10-19
 
-- 修复 CI： 的  在无 lockfile 时直接失败，已移除；补  开发依赖（browser 冒烟测试需要）
+- 修复 CI：`setup-node` 的 `cache: pnpm` 在无 lockfile 时直接失败，已移除；补 `jsdom` 开发依赖（browser 冒烟测试需要）
 - 仅工程面改动，插件行为与 0.4.2 一致
 
 ## 0.4.2 — 2026-10-19
