@@ -90,8 +90,7 @@
 
 /* ── tap state (frames already convey the hit; class kept for tests) ── */
 .bc-root.bc-tap-left .bc-native,
-.bc-root.bc-tap-right .bc-native,
-.bc-root.bc-tap-both .bc-native {
+.bc-root.bc-tap-right .bc-native {
   transform: translateY(1px);
 }
 

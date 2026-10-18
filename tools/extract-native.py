@@ -44,18 +44,32 @@ except ImportError:  # pragma: no cover
 APP_ID = "1337970"
 ASSETS_REL = "BongoCat_Data/sharedassets0.assets"
 
-# canvas + per-part box origins, in unscaled sprite pixels
+# Canvas + per-part box origins, in unscaled sprite pixels.
+#
+# "paw" is the right-paw origin used when the drums are absent. It is the
+# SAME origin as the body on purpose: both sprites are authored in the same
+# 256x256 box, so placing each one at its own textureRect reproduces the
+# game's own two-paw pose — the one shipped as <Skin>Icon (and shown in the
+# skin picker). Verified against CatIcon: the paw's pink pads land at the
+# same height as the left paw's pads, within one pixel.
+# "paw_drum" is the origin the game uses when the paw rests on a drum.
 CANVAS = (340, 250)
 ORIGIN = {
     "cat": (40, -55),
-    "paw": (57, -30),
+    "paw": (40, -55),
+    "paw_drum": (57, -30),
     "bongo_left": (25, 55),
     "bongo_right": (62, 55),
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
-# How far the right paw drops on a tap when no drum hides it (sprite pixels).
-PAW_DROP = 8
+# How far the right paw presses down on a right tap (sprite pixels). The
+# game moves the paw onto the drum; without a drum a short press plus the
+# authored impact dashes reads as the same hit.
+PAW_DROP = 12
+# Connected components smaller than this are the impact dashes; anything
+# larger is the swoosh, which only makes sense against a drum.
+DASH_MAX_AREA = 400
 
 
 # ----------------------------------------------------------------------
@@ -150,20 +164,71 @@ def list_skins(assets: Path) -> list[str]:
     return sorted(names)
 
 
+def _components(img: Image.Image, min_alpha: int = 40):
+    """Yield 8-connected opaque components as lists of (x, y)."""
+    w, h = img.size
+    px = img.load()
+    seen = bytearray(w * h)
+    for y in range(h):
+        for x in range(w):
+            index = y * w + x
+            if seen[index]:
+                continue
+            if px[x, y][3] < min_alpha:
+                seen[index] = 1
+                continue
+            stack = [(x, y)]
+            seen[index] = 1
+            comp = []
+            while stack:
+                cx, cy = stack.pop()
+                comp.append((cx, cy))
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        nx, ny = cx + dx, cy + dy
+                        if 0 <= nx < w and 0 <= ny < h:
+                            j = ny * w + nx
+                            if not seen[j] and px[nx, ny][3] >= min_alpha:
+                                seen[j] = 1
+                                stack.append((nx, ny))
+            yield comp
+
+
+def impact_dashes(img: Image.Image) -> Image.Image:
+    """Keep the small impact strokes of a punch sprite and drop the swoosh.
+
+    The big arc in <Skin>RightPunch traces the paw's path against a drum.
+    Without the drum it reads as a stray outline, while the three dashes
+    still read as an impact mark next to the paw.
+    """
+    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    src, dst = img.load(), out.load()
+    for comp in _components(img):
+        if len(comp) <= DASH_MAX_AREA:
+            for x, y in comp:
+                dst[x, y] = src[x, y]
+    return out
+
+
 def compose(
     sprites: dict[str, tuple[Image.Image, tuple[float, float, float, float]]],
     skin: str,
     scale: int,
     with_drums: bool = False,
 ) -> dict[str, Image.Image]:
-    def art(key: str):
-        img, (rx, ry, rw, rh) = sprites[key]
+    parts = dict(sprites)
+    if not with_drums:
+        # Only the small strokes; the arc needs a drum behind it to make sense.
+        parts["Dashes"] = (impact_dashes(sprites["CatRightPunch"][0]), sprites["CatRightPunch"][1])
+
+    def art(key: str, drop: int = 0):
+        img, (rx, ry, rw, rh) = parts[key]
         img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
-        # The right paw keeps its authored origin in both modes: in the game it
-        # rests on the drum, and without the drum the same spot reads as the paw
-        # resting at the body's lower-right edge.
-        x = ORIGIN_BOX[key][0] + rx
-        y = ORIGIN_BOX[key][1] + (256 - ry - rh)
+        origin = ORIGIN_BOX.get(key, ORIGIN["paw"])
+        if key in ("CatRight", "CatRightPunch", "Dashes"):
+            origin = ORIGIN["paw_drum"] if with_drums else ORIGIN["paw"]
+        x = origin[0] + rx
+        y = origin[1] + (256 - ry - rh) + drop
         return img, x * scale, y * scale
 
     def bbox(img):
@@ -171,13 +236,13 @@ def compose(
 
     w, h = CANVAS[0] * scale, CANVAS[1] * scale
 
-    def frame(cat_key: str, paw_key: str, left_punch: bool, right_punch: bool) -> Image.Image:
+    def frame(cat_key: str, right_punch: bool) -> Image.Image:
         canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         # drums first (they sit behind the paws), punch variants aligned by base
         if with_drums:
-            for side, idle_key, punch_key, punch in (
-                ("bongo_left", "BongoL", "BongoLP", left_punch),
-                ("bongo_right", "BongoR", "BongoRP", right_punch),
+            for idle_key, punch_key, punch in (
+                ("BongoL", "BongoLP", False),
+                ("BongoR", "BongoRP", right_punch),
             ):
                 img, x, y = art(idle_key)
                 if not punch:
@@ -195,20 +260,23 @@ def compose(
         canvas.alpha_composite(img, (int(x), int(y)))
 
         if with_drums:
-            img, x, y = art(paw_key)
+            img, x, y = art("CatRightPunch" if right_punch else "CatRight")
+            canvas.alpha_composite(img, (int(x), int(y)))
+        elif right_punch:
+            # Right paw presses down, with the authored impact dashes.
+            img, x, y = art("CatRight", PAW_DROP)
+            canvas.alpha_composite(img, (int(x), int(y)))
+            img, x, y = art("Dashes", PAW_DROP)
             canvas.alpha_composite(img, (int(x), int(y)))
         else:
-            # Mirror the left paw: same height, resting at the body's right edge.
-            paw, px, py = art("CatRight")
-            if right_punch:
-                py += PAW_DROP * scale
-            canvas.alpha_composite(paw, (int(px), int(py)))
+            img, x, y = art("CatRight")
+            canvas.alpha_composite(img, (int(x), int(y)))
         return canvas
 
     frames = {
-        "idle": frame("CatLeft", "CatRight", False, False),
-        "tap-left": frame("CatLeftPunch", "CatRight", True, False),
-        "tap-right": frame("CatLeft", "CatRightPunch", False, True),
+        "idle": frame("CatLeft", False),
+        "tap-left": frame("CatLeftPunch", False),
+        "tap-right": frame("CatLeft", True),
     }
     if with_drums:
         return frames
@@ -227,6 +295,9 @@ def compose(
 
 
 # box origin lookup keyed by the internal keys used by art()
+# Box origin lookup keyed by the internal keys used by art(). The right-paw
+# entries are placeholders: art() swaps in ORIGIN["paw"] or ORIGIN["paw_drum"]
+# depending on whether the drums are present.
 ORIGIN_BOX = {
     "CatLeft": ORIGIN["cat"],
     "CatLeftPunch": ORIGIN["cat"],

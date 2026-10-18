@@ -267,6 +267,15 @@ check('icon route serves a skin icon', iconAsset.head?.code === 200 && iconAsset
 iconAsset = await callRoute(nativeRoute, 'GET', '/plugins/bongo-cat/native/icons/Nope.png')
 check('icon route 404s unknown skins', iconAsset.head?.code === 404)
 
+console.log('— legacy skin migration —')
+// 0.4.x stored a built-in art id ("classic") in `skin`; 0.5+ stores a Steam
+// sprite prefix. A stale value must not survive into a re-extract.
+writeFileSync(settingsFile, JSON.stringify({ skin: 'classic', counter: 7 }))
+routes.length = 0
+apply(ctx)
+check('stale skin falls back to the default cat', (await rpc('config/get')).value?.skin === 'Cat')
+check('the rest of the stored settings survive', (await rpc('config/get')).value?.counter === 7)
+
 console.log('— bad requests —')
 r = await rpc('nope/unknown')
 check('unknown endpoint rejected', r.ok === false && /unknown bongo-cat endpoint/.test(r.error?.message ?? ''))

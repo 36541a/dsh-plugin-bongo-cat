@@ -133,7 +133,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let settings: BongoCatSettings | null = null
   let disposed = false
   let paused = false
-  let tapSide: 'left' | 'right' = 'left'
+  let nextSide: 'left' | 'right' = 'left'
   let tapTimer: number | null = null
   let spriteIdleTimer: number | null = null
   let hintToastTimer: number | null = null
@@ -273,15 +273,15 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   }
 
   // ── interaction ───────────────────────────────────────────────
-  const setTap = (side: 'left' | 'right' | 'both'): void => {
-    root.classList.remove(cls('bc-tap-left'), cls('bc-tap-right'), cls('bc-tap-both'))
+  const setTap = (side: 'left' | 'right'): void => {
+    root.classList.remove(cls('bc-tap-left'), cls('bc-tap-right'))
     // force reflow so rapid alternating taps restart the transition
     void root.offsetWidth
     root.classList.add(cls(`bc-tap-${side}`))
     setNativeFrame(side === 'left' ? 'tap-left' : 'tap-right')
     if (tapTimer !== null) window.clearTimeout(tapTimer)
     tapTimer = window.setTimeout(() => {
-      root.classList.remove(cls('bc-tap-left'), cls('bc-tap-right'), cls('bc-tap-both'))
+      root.classList.remove(cls('bc-tap-left'), cls('bc-tap-right'))
       setNativeFrame('idle')
       tapTimer = null
     }, TAP_MS)
@@ -299,20 +299,25 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     }, Math.max(120, TAP_MS * 4))
   }
 
-  const slap = (side: 'left' | 'right' | 'both'): void => {
+  const slap = (side: 'left' | 'right'): void => {
     if (settings === null || paused) return
-    if (side === 'left' || side === 'right') {
-      tapSide = side
-      setTap(side)
-      setSpriteFrame(side === 'left' ? 1 : 2)
-    } else {
-      setTap('both')
-      setSpriteFrame(3)
-    }
+    setTap(side)
+    setSpriteFrame(side === 'left' ? 1 : 2)
     if (settings.soundEnabled) sound.tok(1)
     sessionTaps += 1
     applyBadge(settings)
     stats.add(1)
+  }
+
+  /**
+   * Every input hits one paw, alternating left / right — the game itself
+   * exposes only CatHitLeft and CatHitRight (no two-paw hit), so typing and
+   * clicking share a single alternation here too.
+   */
+  const slapNext = (): void => {
+    const side = nextSide
+    nextSide = side === 'left' ? 'right' : 'left'
+    slap(side)
   }
 
   const cycleCorner = (): void => {
@@ -327,14 +332,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     if (disposed || settings === null || !settings.enabled) return
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return
     if (event.key === 'Shift' || event.key === 'CapsLock') return
-    slap(tapSide === 'left' ? 'right' : 'left')
+    slapNext()
   }
 
   const onPointerDown = (event: PointerEvent): void => {
     if (disposed || settings === null || !settings.enabled) return
     if (event.button !== 0) return
     if (event.target !== null && root.contains(event.target)) return
-    slap('both')
+    slapNext()
   }
 
   // ── drag & click on the cat ───────────────────────────────────

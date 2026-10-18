@@ -534,6 +534,17 @@ export function apply(ctx: Context) {
       if (typeof value === 'number' && !Number.isFinite(value)) continue
       next[key] = value
     }
+    // `skin` used to be a built-in art id ("classic", ...). It now holds a
+    // Steam sprite prefix, so a stale value would make every re-extract fail
+    // with "sprites missing for skin 'classic'". Anything the catalog does not
+    // know falls back to the default cat.
+    const catalog = readJson<{ skins?: Array<{ name?: unknown }> }>(join(dir, 'native', 'skins.json'))
+    const known = (catalog?.skins ?? [])
+      .map((item) => item.name)
+      .filter((name): name is string => typeof name === 'string')
+    if (known.length > 0 && !known.includes(next.skin as string)) {
+      next.skin = SETTINGS_DEFAULTS.skin
+    }
     return next as BongoCatSettings
   }
 

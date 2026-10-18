@@ -184,6 +184,7 @@ window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', bubbles: tr
 const tapClass = (el?.className ?? '').split(/\s+/).some((c) => c.includes('bc-tap-'))
 check('keydown triggers a paw tap class', tapClass, el?.className ?? '')
 check('keydown swaps the native frame', nativeWrap?.getAttribute('data-active') !== 'idle', nativeWrap?.getAttribute('data-active') ?? '')
+check('first keydown taps the left paw', nativeWrap?.getAttribute('data-active') === 'tap-left', nativeWrap?.getAttribute('data-active') ?? '')
 await sleep(10)
 check('counter badge counts the tap', el?.textContent?.includes('1') === true, el?.textContent ?? '')
 
@@ -192,13 +193,20 @@ const stillTapping = (el?.className ?? '').split(/\s+/).some((c) => c.includes('
 check('tap class auto-clears', !stillTapping)
 check('native frame returns to idle', nativeWrap?.getAttribute('data-active') === 'idle')
 
+console.log('— left / right alternation —')
+window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'b', bubbles: true, cancelable: true }))
+check('second keydown taps the right paw', nativeWrap?.getAttribute('data-active') === 'tap-right', nativeWrap?.getAttribute('data-active') ?? '')
+await sleep(220)
+window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'c', bubbles: true, cancelable: true }))
+check('third keydown taps the left paw again', nativeWrap?.getAttribute('data-active') === 'tap-left', nativeWrap?.getAttribute('data-active') ?? '')
+await sleep(220)
+
 console.log('— click interaction —')
 document.body.dispatchEvent(new window.MouseEvent('pointerdown', { button: 0, bubbles: true }))
-const bothTap = (el?.className ?? '').split(/\s+/).some((c) => c.includes('bc-tap-both'))
-check('pointerdown triggers both-paw tap', bothTap, el?.className ?? '')
+check('pointerdown also alternates (right paw)', nativeWrap?.getAttribute('data-active') === 'tap-right', nativeWrap?.getAttribute('data-active') ?? '')
 await sleep(10)
 const badgeEl = el?.querySelector('[data-role="bongo-cat-counter"]')
-check('badge counts both taps locally', badgeEl?.textContent?.includes('2') === true, badgeEl?.textContent ?? '')
+check('badge counts all taps locally', badgeEl?.textContent?.includes('4') === true, badgeEl?.textContent ?? '')
 
 console.log('— modifier keys ignored —')
 const classBeforeMod = el?.className ?? ''
