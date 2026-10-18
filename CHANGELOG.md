@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-10-19
+
+**兼容 DSH 0.2.x**（0.2.0-rc.2 移除了 `ctx.settings.register`，旧版插件 `apply()` 抛异常 → 后端不加载 → 设置页卡在「正在读取设置…」，只能靠脚本给构建产物打补丁）：
+
+- 设置改为**插件自带 JSON 存储**（`$DSH_HOME/storages/bongo-cat/settings.json`）：默认值与校验仍来自共享契约，`inject` 只声明 `webServer`，0.1.x / 0.2.x 走同一条代码路径
+- 移除 `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings` 依赖
+- **原版资源导入自动准备环境**：首次点击会创建插件私有 venv（`storages/bongo-cat/pyenv`）并在其中安装 UnityPy，然后调用提取器；不再要求用户手动 `pip install UnityPy`，也不再因"Python 有但没装包"而失败
+- 导入提示与错误文案更新；新增手动 E2E 脚本 `.verify/e2e-native-import.mjs`（真实建 venv + 提取，不进 CI）
+- 测试：host 45 + browser 40 = 85 项断言
+
 ## 0.3.1 — 2026-10-18
 
 - **GitHub 直装开箱可用**：`lib/` 构建产物随仓库发布；移除 `prepare`（安装期脚本），`github:` 直装不再受 pnpm 10+ `allowBuilds` 限制

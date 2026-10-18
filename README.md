@@ -20,7 +20,7 @@
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **趣味彩蛋**：连续快打触发狂暴模式；90 秒不理它开始打瞌睡；单击猫咪触发摸头杀；深夜自动进入犯困配色
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 84 项断言，push/PR 自动跑
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 85 项断言，push/PR 自动跑
 
 ## 安装
 
@@ -67,7 +67,7 @@ dsh plugin --profile web remove dsh-plugin-bongo-cat
 
 1. Settings → 邦哥猫 → **猫咪来源** 选「自动（优先原版）」
 2. 点 **从 Steam 导入原版资源**
-3. 首次需要 Python 3.10+ 与 `pip install UnityPy`（提取器是插件自带的 `tools/extract-native.py`；也可用环境变量 `DSH_BC_PYTHON` 指定解释器）
+3. 首次会自动准备运行环境：在 `storages/bongo-cat/pyenv` 建一个插件私有 venv 并安装 UnityPy（约 50 MB，需要联网，1 分钟左右），不会动你系统里的 Python
 4. 完成后立即生效：`$DSH_HOME/storages/bongo-cat/native/` 下生成 `idle.png` / `tap-left.png` / `tap-right.png`（1020×750）
 
 提取器做的事：定位 Steam 库 → 读取 `BongoCat_Data/sharedassets0.assets` → 取出 `<Skin>Left / Right / LeftPunch / RightPunch` 与双鼓精灵 → 按精灵 `textureRect` 与原版图层坐标合成 → 输出三帧。换皮肤：`python tools/extract-native.py --list` 可列出全部 244 个皮肤，`--skin Black` 这类参数可提取指定皮肤。
@@ -114,7 +114,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 44 项 + browser 40 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 45 项 + browser 40 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```

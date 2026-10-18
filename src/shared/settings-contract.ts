@@ -28,7 +28,6 @@
  * settings panel and the sanitizer all follow automatically. Do NOT
  * hand-write a parallel list anywhere else.
  */
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** Anchor corner of the floating cat. */
 export const POSITIONS = ['bottom-right', 'bottom-left', 'top-left', 'top-right'] as const
@@ -127,7 +126,7 @@ export type SanitizeResult =
   | { ok: false; error: string }
 
 /** The settings namespace key (lowercase kebab-case). */
-export const NS = 'bongo-cat' as SettingsNamespace
+export const NS = 'bongo-cat'
 
 /**
  * Validate a client-supplied config patch against the contract.

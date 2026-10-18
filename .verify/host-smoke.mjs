@@ -1,15 +1,16 @@
 /**
  * Host-half integration smoke test for dsh-plugin-bongo-cat.
  *
- * Loads the real built lib/index.js with a stubbed @deepseek-ai/schemastery
- * and a fake Cordis context, then drives the /bongo-cat RPC channel and the
- * asset routes with synthetic node req/res pairs.
+ * Loads the real built lib/index.js with a fake Cordis context that has NO
+ * `settings` service on purpose: DSH 0.2.x removed ctx.settings.register,
+ * so the plugin must work with webServer alone. Drives the /bongo-cat RPC
+ * channel and the asset routes with synthetic node req/res pairs.
  *
  * Run:  node .verify/host-smoke.mjs
  */
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
-import { copyFileSync, mkdirSync, mkdtempSync, existsSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,28 +29,11 @@ const { SETTINGS_DEFAULTS, sanitizeSettingsPatch } = await import('./lib/contrac
 const { apply } = await import('./lib/index.js')
 
 /* ------------------------------------------------------------------ */
-/* fake Cordis context                                                 */
+/* fake Cordis context (webServer only — no settings service)          */
 /* ------------------------------------------------------------------ */
-
-// The in-memory host starts from the CONTRACT defaults — the same source
-// the real schema is built from. The contract-guard section below then
-// asserts the built plugin agrees.
-const state = { ...SETTINGS_DEFAULTS }
-let registeredNamespace = null
-
-const scope = {
-  get: () => ({ ...state }),
-  update: async (patch) => { Object.assign(state, patch); return { ...state } }
-}
 
 const routes = []
 const ctx = {
-  settings: {
-    register: (ns, schema, options) => {
-      registeredNamespace = { ns, options }
-      return scope
-    }
-  },
   webServer: { register: (route) => { routes.push(route) } },
   effect: (fn) => fn(),
   on: () => () => {},
@@ -134,8 +118,10 @@ const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 const WAV_B64 = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='
 
 console.log('— registration —')
-check('settings namespace registered as bongo-cat', registeredNamespace?.ns === 'bongo-cat')
-check('settings registered with applies: live', registeredNamespace?.options?.applies === 'live')
+// No ctx.settings in the fake context — apply() must still succeed (the
+// 0.2.x compatibility contract). The store writes only on the first update.
+check('applies without a settings service', routes.length >= 4)
+check('settings.json is absent until the first write', !existsSync(join(DSH_HOME, 'storages', 'bongo-cat', 'settings.json')))
 check('prefix route /bongo-cat registered', prefixRoute() !== undefined)
 check('exact route /plugins/bongo-cat/skin registered', exactRoute('/plugins/bongo-cat/skin') !== undefined)
 check('exact route /plugins/bongo-cat/sound registered', exactRoute('/plugins/bongo-cat/sound') !== undefined)
@@ -180,6 +166,16 @@ check('config/set rejects non-writable counter', r.ok === false)
 r = await rpc('config/set', { patch: { skin: 'tabby', position: 'top-left', offsetX: 12 } })
 check('config/set accepts valid patch', r.ok === true && r.value.skin === 'tabby' && r.value.position === 'top-left' && r.value.offsetX === 12, JSON.stringify(r))
 
+// The store must persist to its own file, not to a DSH settings document.
+const settingsFile = join(DSH_HOME, 'storages', 'bongo-cat', 'settings.json')
+let persisted
+try {
+  persisted = JSON.parse(readFileSync(settingsFile, 'utf8'))
+} catch {
+  persisted = undefined
+}
+check('config/set persists settings.json', persisted !== undefined && persisted.skin === 'tabby' && persisted.offsetX === 12, JSON.stringify(persisted))
+
 console.log('— stats —')
 r = await rpc('stats/bump', { count: 5 })
 check('stats/bump accumulates', r.ok === true && r.value.counter === 5, JSON.stringify(r))
@@ -196,7 +192,8 @@ console.log(`     (scanned ${r.value?.roots?.length ?? 0} root(s) on this machin
 console.log('— skin import (base64) —')
 r = await rpc('skins/import', { data: PNG_B64, name: 'test-skin.png' })
 check('skins/import accepts base64 png', r.ok === true && r.value.revision === 1, JSON.stringify(r))
-check('settings synced to revision 1', state.customSkinRevision === 1)
+const afterSkin = await rpc('config/get')
+check('settings synced to revision 1', afterSkin.ok === true && afterSkin.value.customSkinRevision === 1, JSON.stringify(afterSkin).slice(0, 200))
 
 const skinFile = join(DSH_HOME, 'storages', 'bongo-cat', 'skins', 'skin-1.png')
 check('skin file written to storage', existsSync(skinFile))
@@ -213,7 +210,8 @@ r = await rpc('skins/import', { path: 'C:\\Windows\\win.ini', name: 'evil.png' }
 check('skins/import rejects path outside scanned roots', r.ok === false && /outside the scanned/.test(r.error?.message ?? ''), JSON.stringify(r))
 
 r = await rpc('skins/remove')
-check('skins/remove clears revision', r.ok === true && state.customSkinRevision === 0)
+const afterRemove = await rpc('config/get')
+check('skins/remove clears revision', r.ok === true && afterRemove.ok === true && afterRemove.value.customSkinRevision === 0, JSON.stringify(afterRemove).slice(0, 200))
 
 console.log('— sound import —')
 r = await rpc('sounds/import', { data: WAV_B64, name: 'tok.wav' })

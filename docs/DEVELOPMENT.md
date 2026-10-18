@@ -151,30 +151,33 @@ export const inject = ['settings', 'webServer'] // 依赖的服务提供方
       name: 'dsh-plugin-bongo-cat'
 ```
 
-### 4.2 settings 命名空间
+### 4.2 设置存储（自带 JSON，兼容 DSH 0.1.x / 0.2.x）
 
 ```ts
-const scope = ctx.settings.register(NS, BongoCatSchema, { applies: 'live' })
+const scope = {
+  get: () => loadSettings(),                 // 契约默认值 + settings.json
+  update: async (patch) => persist({ ...scope.get(), ...patch })
+}
 ```
 
-- `NS = 'bongo-cat'`：命名空间强制小写 kebab-case；
-- `applies: 'live'`：配置变更立即生效（browser 半通过 RPC 观察）；
-- 解析后的值是深冻结快照，`scope.get()` 读取，`scope.update(patch)` 写入。
+- 路径：`$DSH_HOME/storages/bongo-cat/settings.json`（原子写：`.tmp` + rename，单条写队列防丢更新）；
+- **不用 `ctx.settings`**：DSH 0.2.0-rc.2 移除了 `ctx.settings.register`，旧版插件会在 `apply()` 抛异常导致后端不加载（设置页永远「正在读取设置…」）。自带存储在 0.1.x 与 0.2.x 上是同一条路径，`inject` 只声明 `webServer`；
+- 文件损坏 / 缺字段时按契约默认值合并（类型不符的键被丢弃），不会被一个坏值拖垮整个配置。
 
 完整字段表见 [§8.2](#82-settings-字段表)。
 
-> **重要**：rc.6 的 settings **wire** allowlist 只覆盖内置命名空间，第三方命名空间无法被浏览器侧的 settings-scope binder 直接触达。因此本插件（与参考壁纸插件一致）自己实现了 `/bongo-cat` RPC 通道，`config/get` / `config/set` 在 host 侧中转读写命名空间。
+> **历史**：0.1.x 曾把配置注册进 DSH 的 settings 文档，但 rc.6 的 settings **wire** allowlist 不覆盖第三方命名空间，浏览器侧本来就读不到；`/bongo-cat` RPC 的 `config/get` / `config/set` 一直是唯一接口，因此切换存储对前端零影响。
 
 #### 4.2.1 设置单一真源契约（v0.2.0，借鉴 ADR-0002）
 
 `src/shared/settings-contract.ts` 是全仓唯一的设置真源：字段元数据（kind / default / min / max / writable）、`SETTINGS_DEFAULTS`、`sanitizeSettingsPatch`、`WRITABLE_FIELDS`。**两端都从它派生，任何一侧都不再手写平行列表**：
 
-- host：`src/index.ts` 用契约默认值构建 schemastery schema，`config/set` 直接调用契约的 `sanitizeSettingsPatch`——未知字段、宿主权威字段（`counter`，只能走 `stats/*`）、越界值一律**大声拒绝**（`bad-request`），绝不静默丢弃；
+- host：`config/set` 调用契约的 `sanitizeSettingsPatch`——未知字段、宿主权威字段（`counter`，只能走 `stats/*`）、越界值一律**大声拒绝**（`bad-request`），绝不静默丢弃；`config/get` 返回「默认值 + 磁盘值」的合并结果；
 - browser：`src/client/settings.ts` 从契约再导出 `BongoCatSettings` 类型（`DefaultOf` 条件映射推导，零手写接口）。
 
-为什么值得单文件管理：白名单式双抄是**静默漂移**——任一侧漏一个键，该键在经过那一侧时被丢弃，用户症状是"改了不生效"，无异常无日志。参考项目（dsh-wallpaper-engine）的 ADR-0002 记录过同款事故。契约对账由守卫强制执行：host 冒烟测试每次运行都断言「宿主 schema 键集 == 契约键集」且「默认值逐一深等」（见 §12）。
+为什么值得单文件管理：白名单式双抄是**静默漂移**——任一侧漏一个键，该键在经过那一侧时被丢弃，用户症状是"改了不生效"，无异常无日志。参考项目（dsh-wallpaper-engine）的 ADR-0002 记录过同款事故。契约对账由守卫强制执行：host 冒烟测试每次运行都断言「默认值逐一深等」（见 §12）。
 
-**硬约束**：契约被 browser 半导入，因此禁止 value import（无 node 内置、无 @deepseek-ai 包、无顶层副作用）——schemastery 的 schema 构建函数因此放在 host 侧 `src/index.ts` 而非契约内。新增字段只改契约一处，schema / 类型 / 面板 / 消毒器自动跟随。
+**硬约束**：契约被 browser 半导入，因此禁止 value import（无 node 内置、无 @deepseek-ai 包、无顶层副作用）。新增字段只改契约一处，类型 / 面板 / 消毒器 / 默认值自动跟随。
 
 ### 4.3 webServer 路由
 
@@ -349,9 +352,8 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
 
-- 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` 与 `DefaultBongoLeft/Right(+Punch)` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 1020×750 的 `idle / tap-left / tap-right`。
-- 合成规则：手鼓与身体先画、右爪后画；打击帧的整框精灵按 alpha 包围盒的**底边中心**对齐到闲置帧对应鼓的底边，保证换帧不跳。
-- 服务（host）：`native/status` 校验 `native.json` + 三张帧是否齐全；`native/import` 寻找可用的 Python（`DSH_BC_PYTHON` 优先，其次 `python` / `python3` / `py`，需能 `import UnityPy, PIL`）并异步执行提取器；静态路由 `/plugins/bongo-cat/native/*.png` 只认三个白名单帧名。
+- 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` 与 `DefaultBongoLeft/Right(+Punch)` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 1020×750 的 `idle / tap-left / tap-right`。- 合成规则：手鼓与身体先画、右爪后画；打击帧的整框精灵按 alpha 包围盒的**底边中心**对齐到闲置帧对应鼓的底边，保证换帧不跳。
+- 服务（host）：`native/status` 校验 `native.json` + 三张帧是否齐全；`native/import` 先解析解释器——已有 `storages/bongo-cat/pyenv` 就直接用；否则找 `DSH_BC_PYTHON` / `python` / `python3` / `py -3` / `%LOCALAPPDATA%\Programs\Python\Python3*` / `%PROGRAMFILES%\Python3*`，哪个能 `import UnityPy, PIL` 就用哪个；都没有时用任一可用 Python **建插件私有 venv 并 `pip install UnityPy`**（约 26 秒，不改动系统环境），再执行提取器。静态路由 `/plugins/bongo-cat/native/*.png` 只认三个白名单帧名。
 - 渲染（client）：`cat.ts` 预创建三张 `<img>` 叠放，根节点 `bc-native-mode` 时隐藏 SVG；`data-active` 切帧，敲击 130ms 后回 `idle`。`renderer=svg` 强制回内置猫；`auto` 在资源就绪时用原版。
 - 缓存与刷新：帧 URL 带 `?v=<extractedAt>`；设置面板导入/移除后派发 `bongo-cat:native-changed` 事件，overlay 收到后重新拉 `native/status` 并重绘，无需刷新页面。
 
@@ -513,11 +515,11 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 ## 12. 附：自动化冒烟测试与守卫
 
-仓库内置两级验证，双端共 84 项断言 + 契约/CSS 守卫，改动双端代码后应保持全绿：
+仓库内置两级验证，双端共 85 项断言 + 契约/CSS 守卫，改动双端代码后应保持全绿：
 
 | 测试 | 覆盖内容 |
 |---|---|
-| `.verify/host-smoke.mjs`（44 项） | settings 注册、四条路由、RPC 信封、**契约对账**、消毒器单元断言、**原版资源**（status / 帧路由 / info / remove）、renderer 枚举、stats、skins/sounds 导入、资产路由 200/404、越权路径拒绝 |
+| `.verify/host-smoke.mjs`（45 项） | settings 自带存储（无 ctx.settings）、四条路由、RPC 信封、**契约对账**、消毒器单元断言、**原版资源**（status / 帧路由 / info / remove）、renderer 枚举、stats、skins/sounds 导入、资产路由 200/404、越权路径拒绝 |
 | `.verify/client-smoke.mjs`（40 项） | ModuleLoader 协议、locale/section 注册、overlay 挂载、敲击与修饰键、**原版模式**（挂载、帧 URL、切帧、renderer 切换）、可见性暂停、首启提示、换肤重绘、dispose |
 | `scripts/verify.mjs` 硬档 | 构建新鲜度、契约探针、**CSS 模块键名核对**（styles.* / cls() 必须在样式表中存在） |
 | `scripts/verify.mjs` 软档 | 发布面、i18n 三查、CHANGELOG |

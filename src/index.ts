@@ -2,26 +2,32 @@
  * dsh-plugin-bongo-cat — host half.
  *
  * Provides, for the Web profile composition:
- *  - a user-settings namespace 'bongo-cat' (schema + live apply; the
- *    namespace itself is not exposed on the settings wire API — the
- *    rc.6 allowlist covers only built-in namespaces — so the browser
- *    reads and writes it through this channel's config/get and
- *    config/set endpoints),
+ *  - a self-contained settings store at $DSH_HOME/storages/bongo-cat/
+ *    settings.json (defaults and validation come from the shared
+ *    contract; the browser reads and writes it through config/get and
+ *    config/set). It deliberately does NOT use ctx.settings: DSH 0.2.x
+ *    removed ctx.settings.register, and 0.1.x never exposed third-party
+ *    namespaces on the settings wire — owning the file works on both.
  *  - the /bongo-cat channel (config/get, config/set, stats/bump,
  *    stats/reset, skins/scan, skins/import, skins/remove,
- *    sounds/import, sounds/remove, info), mounted as a Host-webserver
- *    prefix route that speaks the generic Connection RPC envelope
- *    itself (see serveRpc for why),
+ *    sounds/import, sounds/remove, native/status, native/import,
+ *    native/remove, info), mounted as a Host-webserver prefix route that
+ *    speaks the generic Connection RPC envelope itself (see serveRpc).
  *  - the GET /plugins/bongo-cat/skin?v=<revision> route serving an
  *    imported skin image with revision-based cache busting,
  *  - the GET /plugins/bongo-cat/sound?v=<revision> route serving an
- *    imported .wav sound the same way.
+ *    imported .wav sound the same way,
+ *  - the GET /plugins/bongo-cat/native/<frame>.png route serving the
+ *    frames extracted from the user's own Steam install.
  *
  * Storage layout ($DSH_HOME/storages/bongo-cat):
+ *   settings.json                 resolved settings (contract defaults + patch)
  *   skins/skin-<revision>.<ext>   the last imported skin image
  *   skins/skin.json               { revision, name, source, ext, updatedAt }
  *   sounds/sound-<revision>.<ext> the last imported sound
  *   sounds/sound.json             { revision, name, updatedAt }
+ *   native/{idle,tap-left,tap-right}.png + native.json  (extractor output)
+ *   pyenv/                        plugin-local venv used by the extractor
  *
  * Revisions are server-authoritative and monotonic, so a stale URL can
  * never show a mismatched asset.
@@ -41,69 +47,25 @@ import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 
-// Type-only imports keep the Context service augmentations active:
-//   ctx.settings  (@deepseek-ai/dsh-settings)
-//   ctx.webServer (@deepseek-ai/dsh-host-webserver)
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only import keeps the ctx.webServer service augmentation active.
+// (ctx.settings is deliberately unused: DSH 0.2.x removed its register API.)
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
 // The settings contract is the single source of truth for keys, defaults
-// and ranges (see src/shared/settings-contract.ts). The schema builder
-// lives HERE, not in the contract, because the contract is imported by
-// the browser half and must stay free of value imports.
+// and ranges (see src/shared/settings-contract.ts). The store below only
+// merges + validates against it; there is no second schema.
 import {
-  NS as CONTRACT_NS,
-  SETTINGS_FIELDS,
-  WRITABLE_FIELDS,
+  SETTINGS_DEFAULTS,
   sanitizeSettingsPatch,
-  type FieldMeta
+  type BongoCatSettings
 } from './shared/settings-contract'
 
 export const name = 'bongo-cat'
 
-/** Settings namespace key (lowercase kebab-case). */
-const NS = CONTRACT_NS as SettingsNamespace
-
 /** Bongo Cat's Steam app id (used to locate Workshop content). */
 const BONGO_CAT_APPID = '1337970'
-
-/**
- * Build the schemastery settings schema from the contract. Defaults come
- * from the contract; runtime validation is sanitizeSettingsPatch (wired
- * into config/set below), so the two can never drift.
- */
-function buildSettingsSchema(): z.Schema {
-  const shape: Record<string, z.Schema> = {}
-  for (const [key, meta] of Object.entries(SETTINGS_FIELDS)) {
-    const m = meta as FieldMeta
-    switch (m.kind) {
-      case 'boolean':
-        shape[key] = z.boolean().default(m.default as boolean)
-        break
-      case 'string':
-        shape[key] = z.string().default(m.default as string)
-        break
-      case 'natural':
-        shape[key] = z.natural().default(m.default as number)
-        break
-      case 'number':
-        shape[key] = z.number().default(m.default as number)
-        break
-      case 'position':
-        shape[key] = z.union(['bottom-right', 'bottom-left', 'top-left', 'top-right']).default(m.default as string)
-        break
-      case 'enum':
-        shape[key] = z.union([...(m.values ?? [])]).default(m.default as string)
-        break
-    }
-  }
-  return z.object(shape)
-}
-
-const BongoCatSchema = buildSettingsSchema()
 
 /** Asset metadata next to a stored file. */
 interface AssetMeta {
@@ -156,11 +118,6 @@ const SOUND_CONTENT_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg'
 }
-
-/** Fields the browser may change through config/set (from the contract). */
-const CONFIG_FIELDS: readonly string[] = WRITABLE_FIELDS
-
-const POSITIONS = new Set(['bottom-right', 'bottom-left', 'top-left', 'top-right'])
 
 /** `POST ${CHANNEL}/${endpoint}` → endpoint, or undefined when the path is not ours. */
 function endpointOf(pathname: string): string | undefined {
@@ -473,13 +430,63 @@ export function apply(ctx: Context) {
   }
 
   /** Find a Python that can import UnityPy (Pillow ships with it). */
-  const findPython = async (): Promise<string | null> => {
-    const candidates = [process.env.DSH_BC_PYTHON, 'python', 'python3', 'py'].filter((item): item is string => typeof item === 'string' && item.length > 0)
-    for (const candidate of candidates) {
-      const result = await runCommand(candidate, ['-c', 'import UnityPy, PIL; print("ok")'], 20000)
-      if (result.status === 0 && result.out.includes('ok')) return candidate
+  const VENV_DIR = join(dir, 'pyenv')
+  const venvPython = process.platform === 'win32'
+    ? join(VENV_DIR, 'Scripts', 'python.exe')
+    : join(VENV_DIR, 'bin', 'python')
+
+  /** Interpreter candidates, each with the args needed before `-c`/`-m`. */
+  const pythonCandidates = (): Array<{ cmd: string; prefix: string[] }> => {
+    const list: Array<{ cmd: string; prefix: string[] }> = []
+    if (process.env.DSH_BC_PYTHON) list.push({ cmd: process.env.DSH_BC_PYTHON, prefix: [] })
+    list.push({ cmd: 'python', prefix: [] }, { cmd: 'python3', prefix: [] }, { cmd: 'py', prefix: ['-3'] })
+
+    const globDirs = (root: string | undefined, pattern: RegExp): void => {
+      if (!root) return
+      try {
+        for (const entry of readdirSync(root)) {
+          if (!pattern.test(entry)) continue
+          const candidate = join(root, entry, process.platform === 'win32' ? 'python.exe' : 'bin/python3')
+          if (existsSync(candidate)) list.push({ cmd: candidate, prefix: [] })
+        }
+      } catch { /* missing dir is fine */ }
     }
-    return null
+    globDirs(process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Programs', 'Python') : undefined, /^Python3/i)
+    globDirs(process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES) : undefined, /^Python3/i)
+    globDirs(join(homedir(), '.workbuddy', 'binaries', 'python', 'versions'), /^\d+\.\d+\.\d+$/i)
+    return list
+  }
+
+  const probeUnityPy = async (cmd: string, prefix: string[]): Promise<boolean> => {
+    const result = await runCommand(cmd, [...prefix, '-c', 'import UnityPy, PIL; print("ok")'], 20000)
+    return result.status === 0 && result.out.includes('ok')
+  }
+
+  /**
+   * Resolve a Python that can run the extractor, bootstrapping a plugin-local
+   * venv when the interpreter lacks UnityPy. The venv lives next to the
+   * plugin's data, so the user's global Python stays untouched.
+   */
+  const resolvePython = async (): Promise<{ python: string } | { error: string }> => {
+    if (existsSync(venvPython)) return { python: venvPython }
+
+    for (const { cmd, prefix } of pythonCandidates()) {
+      if (await probeUnityPy(cmd, prefix)) return { python: cmd }
+    }
+
+    // No interpreter has UnityPy yet — find any working Python and build a venv.
+    for (const { cmd, prefix } of pythonCandidates()) {
+      const version = await runCommand(cmd, [...prefix, '-c', 'import sys; print(sys.version_info[0])'], 20000)
+      if (version.status !== 0 || !version.out.includes('3')) continue
+
+      const created = await runCommand(cmd, [...prefix, '-m', 'venv', VENV_DIR], 180000)
+      if (created.status !== 0 || !existsSync(venvPython)) continue
+
+      const pip = await runCommand(venvPython, ['-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'UnityPy'], 420000)
+      if (pip.status === 0 && await probeUnityPy(venvPython, [])) return { python: venvPython }
+      return { error: `安装 UnityPy 失败：${pip.out.slice(-500) || `exit ${pip.status}`}` }
+    }
+    return { error: '未找到 Python 3.10+。请安装 Python（勾选 Add to PATH）后重试，或用 DSH_BC_PYTHON 指定解释器。' }
   }
 
   const readJson = <T,>(path: string): T | null => {
@@ -502,12 +509,55 @@ export function apply(ctx: Context) {
     return meta as AssetMeta
   }
 
-  // ── settings namespace ─────────────────────────────────────────────
-  // Registered for schema validation, defaults, and persistence in the
-  // user settings document. The rc.6 settings WIRE allowlist does not
-  // cover third-party namespaces, so the browser half reads and writes
-  // it through the /bongo-cat channel below.
-  const scope = ctx.settings.register(NS, BongoCatSchema, { applies: 'live' })
+  // ── settings store (self-contained, version-proof) ────────────────
+  // DSH 0.2.x removed ctx.settings.register, and 0.1.x never exposed
+  // third-party namespaces on the settings wire anyway. Owning the file
+  // keeps the same code path on every kernel version and makes the
+  // browser's config/get + config/set the only interface.
+  const settingsPath = join(dir, 'settings.json')
+  let settingsCache: BongoCatSettings | null = null
+  let writeChain: Promise<void> = Promise.resolve()
+
+  /** Read on-disk settings and coerce them onto the contract defaults. */
+  const loadSettings = (): BongoCatSettings => {
+    let stored: Record<string, unknown> = {}
+    try {
+      const raw = JSON.parse(readFileSync(settingsPath, 'utf8')) as unknown
+      if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) stored = raw as Record<string, unknown>
+    } catch {
+      // first run (no file) or a hand-edited broken file — defaults win
+    }
+    const next: Record<string, unknown> = { ...SETTINGS_DEFAULTS }
+    for (const [key, value] of Object.entries(stored)) {
+      const fallback = (SETTINGS_DEFAULTS as Record<string, unknown>)[key]
+      if (fallback === undefined || typeof value !== typeof fallback) continue
+      if (typeof value === 'number' && !Number.isFinite(value)) continue
+      next[key] = value
+    }
+    return next as BongoCatSettings
+  }
+
+  const persistSettings = (next: BongoCatSettings): Promise<void> => {
+    settingsCache = next
+    const payload = JSON.stringify(next, null, 2)
+    // One write chain: two concurrent config/set calls must not lose an update.
+    writeChain = writeChain.then(() => {
+      const tmp = settingsPath + '.tmp'
+      writeFileSync(tmp, payload, 'utf8')
+      renameSync(tmp, settingsPath)
+    }).catch(() => undefined)
+    return writeChain
+  }
+
+  const scope = {
+    get: (): BongoCatSettings => {
+      if (settingsCache === null) settingsCache = loadSettings()
+      return settingsCache
+    },
+    update: async (patch: Partial<BongoCatSettings>): Promise<void> => {
+      await persistSettings({ ...scope.get(), ...patch })
+    }
+  }
 
   /** Persist an imported asset atomically and return its new revision. */
   const importAsset = (kind: 'skin' | 'sound', sourcePath: string | null, base64: string | null, name: string): AssetMeta | string => {
@@ -682,18 +732,15 @@ export function apply(ctx: Context) {
         if (!existsSync(extractorPath)) {
           return failInternal(`extractor not found at ${extractorPath}`)
         }
-        const python = await findPython()
-        if (python === null) {
-          return failBadRequest(
-            '未找到可用的 Python + UnityPy。请安装 Python 3.10+ 后执行 pip install UnityPy，' +
-            '或用 DSH_BC_PYTHON 环境变量指定解释器。'
-          )
+        const python = await resolvePython()
+        if ('error' in python) {
+          return failBadRequest(python.error)
         }
         const requested = (typeof payload === 'object' && payload !== null ? (payload as { skin?: unknown }).skin : undefined)
         const skin = typeof requested === 'string' && /^[A-Za-z0-9.]{1,64}$/.test(requested) ? requested : null
         const args = [extractorPath, '--out', nativeDir]
         if (skin !== null) args.push('--skin', skin)
-        const result = await runCommand(python, args, 180000)
+        const result = await runCommand(python.python, args, 300000)
         if (result.status !== 0) {
           return failBadRequest(`提取失败：${result.out.slice(-600) || `exit ${result.status}`}`)
         }
@@ -856,4 +903,4 @@ export function apply(ctx: Context) {
   }), 'bongo-cat: sound route')
 }
 
-export const inject = ['settings', 'webServer']
+export const inject = ['webServer']
