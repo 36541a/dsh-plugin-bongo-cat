@@ -1,15 +1,18 @@
 # dsh-plugin-bongo-cat
 
-把 Steam 上那只免费的邦哥猫（Bongo Cat，app 1337970）请进 **DeepSeek Harness** 的 Web 界面：你打字，它敲爪；你点鼠标，它双爪齐下；闲着它会打瞌睡，连击太快它会进入狂暴模式。
+把 **Steam 上那只原版邦哥猫**（Bongo Cat，app 1337970）请进 **DeepSeek Harness** 的 Web 界面：你打字，它敲爪；你点鼠标，它双爪齐下；闲着它会打瞌睡，连击太快它会进入狂暴模式。
+
+画面用的就是游戏本体的原始美术资源——插件从你**本机已安装的游戏**里提取精灵、按游戏自己的图层原位合成，逐帧播放，不是重画的仿制品。资源不随插件分发，也不离开你的电脑。
 
 插件参考了社区壁纸插件（`JerryPhoenixCKY/dsh-plugin-wallpaper`）的双端 bundle 架构，完全遵循 DSH 官方客户端插件协议；v0.2.0 起的工程体系（设置单一真源、两级守卫、产物纪律）借鉴了 `elysia395/dsh-wallpaper-engine`。
 
 ## 功能
 
+- **原版美术**：从本机 Steam 安装的 Bongo Cat 中提取原始精灵（身体 / 右爪 / 左右手鼓），按游戏图层与画布坐标合成 idle、左击、右击三帧，画面与原版一致
 - **敲击互动**：键盘敲击 → 猫爪左右交替；鼠标点击 → 双爪齐敲；键盘灯随敲击亮起
-- **8 款内置 SVG 皮肤**：经典白猫、午夜黑猫、橘猫条条、云朵灰猫、暹罗公子、礼服猫（领结）、三花泼墨、樱花粉粉
-- **Steam 皮肤导入**：自动扫描本机 Steam 库中的 Bongo Cat 安装目录与创意工坊（app 1337970），一键把图片导入为自定义皮肤
-- **自定义精灵图皮肤**：导入横向精灵图 PNG（帧数 2–12 可调），完整还原"原版猫"手感
+- **内置 SVG 备选**：没装游戏或不想用原版资源时，8 款内置 SVG 皮肤照常可用（经典白、午夜黑、橘猫、云朵灰、暹罗、礼服、三花、樱花）
+- **Steam 皮肤导入**：扫描本机 Bongo Cat 安装目录与创意工坊（app 1337970），把图片导入为自定义皮肤
+- **自定义精灵图皮肤**：导入横向精灵图 PNG（帧数 2–12 可调）
 - **合成音效**：内置 WebAudio 合成的"tok"敲击声，零音频文件；也可导入自己的 `.wav`
 - **敲击计数器**：实时计数，总数在 host 侧持久化（重启不丢）
 - **心情预置**：专注 / 禅域 / 派对 / 夜猫 四个一键快照，整套配置单个请求原子落盘
@@ -17,7 +20,7 @@
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **趣味彩蛋**：连续快打触发狂暴模式；90 秒不理它开始打瞌睡；单击猫咪触发摸头杀；深夜自动进入犯困配色
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、双端 65 项断言，push/PR 自动跑
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 84 项断言，push/PR 自动跑
 
 ## 安装
 
@@ -58,6 +61,19 @@ dsh plugin --profile web remove dsh-plugin-bongo-cat
 
 > 导入皮肤 / 音效只能在本机页面（localhost）操作，这是 DSH 的写入通道安全限制。
 
+## 原版资源（Steam）
+
+原版模式依赖本机安装的 Bongo Cat（Steam 免费游戏，app 1337970）：
+
+1. Settings → 邦哥猫 → **猫咪来源** 选「自动（优先原版）」
+2. 点 **从 Steam 导入原版资源**
+3. 首次需要 Python 3.10+ 与 `pip install UnityPy`（提取器是插件自带的 `tools/extract-native.py`；也可用环境变量 `DSH_BC_PYTHON` 指定解释器）
+4. 完成后立即生效：`$DSH_HOME/storages/bongo-cat/native/` 下生成 `idle.png` / `tap-left.png` / `tap-right.png`（1020×750）
+
+提取器做的事：定位 Steam 库 → 读取 `BongoCat_Data/sharedassets0.assets` → 取出 `<Skin>Left / Right / LeftPunch / RightPunch` 与双鼓精灵 → 按精灵 `textureRect` 与原版图层坐标合成 → 输出三帧。换皮肤：`python tools/extract-native.py --list` 可列出全部 244 个皮肤，`--skin Black` 这类参数可提取指定皮肤。
+
+**版权说明**：美术资源版权归 Bongo Cat 作者所有。插件仓库、npm 包与 zip **都不包含任何游戏图像**；提取只在你的机器上运行，产物只写入本机 DSH 数据目录，用于个人显示。
+
 ## 目录结构
 
 ```
@@ -81,6 +97,8 @@ dsh-plugin-bongo-cat/
 ├── scripts/
 │   ├── build.mjs                 # esbuild：双端构建 + CSS Modules + ModuleLoader 包裹
 │   └── verify.mjs                # 两级守卫运行器（硬/软档）
+├── tools/
+│   └── extract-native.py         # 本机提取器：从 Steam 安装导出并合成原版帧
 ├── .verify/                      # 冒烟测试（host/browser/契约探针）
 ├── cordis.patch.yml              # host 端插件注册
 └── docs/
@@ -96,7 +114,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约对账 + host 34 项 + browser 31 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 44 项 + browser 40 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```

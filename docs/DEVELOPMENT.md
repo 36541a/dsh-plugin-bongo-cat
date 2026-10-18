@@ -345,6 +345,16 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 
 `presets.ts` 的四个预置（专注 / 禅域 / 派对 / 夜猫）是相关设置键的**完整补丁快照**，经**单个** `config/set` 落盘——host 的契约消毒器整块校验，要么全落要么不落，不存在"半应用的心情"。这是 dsh-wallpaper-engine ADR-0011「预设保存整套配置」思想的桌宠尺度简化；用户可存预设（JSON 导入导出）在路线图上（见 ANALYSIS §7）。
 
+### 5.13 原版美术模式（v0.3.0）
+
+**为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
+
+- 提取（`tools/extract-native.py`）：定位 Steam 库 → UnityPy 打开资源文件 → 按名字取 `<Skin>Left / Right / LeftPunch / RightPunch` 与 `DefaultBongoLeft/Right(+Punch)` → 用每张精灵的 `textureRect` 把它们放回**同一个 256×256 作者画布空间**，再按部件原点（`ORIGIN`，来自 prefab 的 RectTransform 比例与人工校核）合成 → 输出 1020×750 的 `idle / tap-left / tap-right`。
+- 合成规则：手鼓与身体先画、右爪后画；打击帧的整框精灵按 alpha 包围盒的**底边中心**对齐到闲置帧对应鼓的底边，保证换帧不跳。
+- 服务（host）：`native/status` 校验 `native.json` + 三张帧是否齐全；`native/import` 寻找可用的 Python（`DSH_BC_PYTHON` 优先，其次 `python` / `python3` / `py`，需能 `import UnityPy, PIL`）并异步执行提取器；静态路由 `/plugins/bongo-cat/native/*.png` 只认三个白名单帧名。
+- 渲染（client）：`cat.ts` 预创建三张 `<img>` 叠放，根节点 `bc-native-mode` 时隐藏 SVG；`data-active` 切帧，敲击 130ms 后回 `idle`。`renderer=svg` 强制回内置猫；`auto` 在资源就绪时用原版。
+- 缓存与刷新：帧 URL 带 `?v=<extractedAt>`；设置面板导入/移除后派发 `bongo-cat:native-changed` 事件，overlay 收到后重新拉 `native/status` 并重绘，无需刷新页面。
+
 ---
 
 ## 6. 构建系统（`scripts/build.mjs`）
@@ -435,9 +445,12 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 | `skins/remove` | `{}` | `{ removed: true }` | 删除自定义皮肤 |
 | `sounds/import` | `{ data, name }`（base64） | `{ revision, name, ext }` | ≤ 2 MB |
 | `sounds/remove` | `{}` | `{ removed: true }` | 删除自定义音效 |
-| `info` | `{}` | `{ skin, sound }` | 资产元信息 |
+| `native/status` | `{}` | `{ available, skin?, size?, extractedAt?, missing? }` | 原版资源是否就绪 |
+| `native/import` | `{ skin? }` | `{ available, … }` | 运行 `tools/extract-native.py`（需 Python+UnityPy） |
+| `native/remove` | `{}` | `{ removed: true }` | 删除 `storages/bongo-cat/native/` |
+| `info` | `{}` | `{ skin, sound, native }` | 资产元信息 |
 
-路由：`GET /plugins/bongo-cat/skin?v=<rev>`、`GET /plugins/bongo-cat/sound?v=<rev>`（不可变缓存，stale 404）。
+路由：`GET /plugins/bongo-cat/skin?v=<rev>`、`GET /plugins/bongo-cat/sound?v=<rev>`（不可变缓存，stale 404）、`GET /plugins/bongo-cat/native/<idle|tap-left|tap-right>.png`（帧名白名单，未知帧 404）。
 
 ### 8.2 settings 字段表
 
@@ -446,6 +459,7 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 | 字段 | 类型 | 默认 | 范围 / 说明 |
 |---|---|---|---|
 | `enabled` | boolean | `true` | 总开关 |
+| `renderer` | enum | `auto` | `auto` / `native` / `svg`：自动优先原版美术 |
 | `skin` | string | `classic` | 内置皮肤 id，`/^[a-z0-9-]{1,32}$/` |
 | `customSkinRevision` | natural | `0` | 自定义皮肤 revision，0 = 无 |
 | `customSkinFrames` | natural | `4` | 精灵图帧数 2–12 |
@@ -499,12 +513,13 @@ CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm buil
 
 ## 12. 附：自动化冒烟测试与守卫
 
-仓库内置两级验证，双端共 65 项断言 + 契约对账，改动双端代码后应保持全绿：
+仓库内置两级验证，双端共 84 项断言 + 契约/CSS 守卫，改动双端代码后应保持全绿：
 
 | 测试 | 覆盖内容 |
 |---|---|
-| `.verify/host-smoke.mjs`（34 项） | settings 注册、三条路由、RPC 信封、**契约对账**（宿主 schema 键集/默认值 == 契约）、消毒器 7 项单元断言、config/set 消毒（范围/白名单/大声拒绝）、stats、skins/sounds 导入、资产路由 200/404、stale revision 404、越权路径拒绝、未知 endpoint 拒绝 |
-| `.verify/client-smoke.mjs`（31 项） | ModuleLoader 协议加载、locale/section 注册、overlay 挂载、键盘/鼠标敲击、修饰键忽略、**可见性暂停/恢复**、**首启提示 toast**、皮肤切换重绘、开关、dispose 清理 |
+| `.verify/host-smoke.mjs`（44 项） | settings 注册、四条路由、RPC 信封、**契约对账**、消毒器单元断言、**原版资源**（status / 帧路由 / info / remove）、renderer 枚举、stats、skins/sounds 导入、资产路由 200/404、越权路径拒绝 |
+| `.verify/client-smoke.mjs`（40 项） | ModuleLoader 协议、locale/section 注册、overlay 挂载、敲击与修饰键、**原版模式**（挂载、帧 URL、切帧、renderer 切换）、可见性暂停、首启提示、换肤重绘、dispose |
+| `scripts/verify.mjs` 硬档 | 构建新鲜度、契约探针、**CSS 模块键名核对**（styles.* / cls() 必须在样式表中存在） |
 | `scripts/verify.mjs` 软档 | 发布面、i18n 三查、CHANGELOG |
 
 运行（Node ≥ 22，esbuild 与 jsdom 为 devDependencies）：

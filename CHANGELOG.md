@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-10-18
+
+**改为使用 Steam 原版美术资源**（此前是自己画的 SVG 猫，与"跟原版一模一样"的要求不符）：
+
+- 新增「原版模式」：从用户本机安装的 Bongo Cat（Unity）中提取原始精灵（`<Skin>Left/Right/LeftPunch/RightPunch` + 双鼓），按游戏自己的图层与画布坐标原位合成为 idle / 左击 / 右击 三帧，再用插件逐帧播放——画面即原版
+- 新增 `tools/extract-native.py`：本机提取器（Python + UnityPy），自动定位 Steam 库、导出并合成 1020×750 帧，写入 `$DSH_HOME/storages/bongo-cat/native/`
+- host 新增 `native/status`、`native/import`、`native/remove` 三个 endpoint 与 `/plugins/bongo-cat/native/<frame>.png` 资产路由；`native/import` 会寻找可用的 Python（`DSH_BC_PYTHON` 可指定）并运行提取器
+- 设置面板新增「猫咪来源」：自动 / Steam 原版 / 内置 SVG，以及原版资源状态、导入、重新提取、移除
+- 资源**不随插件分发**：仓库与 npm 包只含提取器，图像始终留在用户本机
+- 修复 CSS Modules 键名错配（`styles.root` vs `.bc-root` 等）——该问题会让动画类全部失效；新增硬档守卫 `css-module keys exist`，防止再犯
+- 测试：host 34→44 项、browser 31→40 项（共 84 项断言）
+
 ## 0.2.0 — 2026-10-17
 
 借鉴 `elysia395/dsh-wallpaper-engine` 的工程体系做的结构性升级（分析见 `docs/ANALYSIS-dsh-wallpaper-engine.md`）：

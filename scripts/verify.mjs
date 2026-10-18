@@ -104,6 +104,40 @@ function checkContractDrift() {
   ok('contract probe built (drift assertions live in host-smoke)')
 }
 
+/**
+ * CSS-module key guard. `.module.css` exports a name map; JS accesses it by
+ * key. A key that does not exist in the stylesheet silently degrades to
+ * `undefined` (or, worse, the raw literal via a fallback helper) — the
+ * element then has no styling / no animation at all, with zero errors.
+ * This caught a real bug: cat.ts asked for `styles.root` while the sheet
+ * declared `.bc-root`.
+ */
+function checkStyleKeys() {
+  const pairs = [
+    ['src/client/cat.ts', 'src/client/cat.module.css'],
+    ['src/client/BongoCatSection.tsx', 'src/client/BongoCatSection.module.css']
+  ]
+  const problems = []
+  for (const [tsFile, cssFile] of pairs) {
+    const ts = readFileSync(path.join(ROOT, tsFile), 'utf8')
+    const css = readFileSync(path.join(ROOT, cssFile), 'utf8')
+    const declared = new Set([...css.matchAll(/\.([A-Za-z_][A-Za-z0-9_-]*)/g)].map((m) => m[1]))
+    const used = new Set([
+      ...[...ts.matchAll(/styles\.([A-Za-z0-9_]+)/g)].map((m) => m[1]),
+      ...[...ts.matchAll(/styles\['([^']+)'\]/g)].map((m) => m[1]),
+      ...[...ts.matchAll(/\bcls\('([^']+)'\)/g)].map((m) => m[1])
+    ])
+    for (const key of used) {
+      if (!declared.has(key)) problems.push(`${path.basename(tsFile)} → ${key}`)
+    }
+  }
+  if (problems.length > 0) {
+    hardFail('css-module keys exist', `missing in stylesheet: ${problems.join(', ')}`)
+    return
+  }
+  ok('css-module keys exist (styles.* / cls() all declared)')
+}
+
 /* ------------------------------------------------------------------ */
 /* soft tier                                                           */
 /* ------------------------------------------------------------------ */
@@ -169,6 +203,7 @@ if (mode === 'hard') {
   console.log('— hard tier (user-facing failures) —')
   checkBuildFreshness()
   checkContractDrift()
+  checkStyleKeys()
   runSmoke('host-smoke.mjs')
   runSmoke('client-smoke.mjs')
 

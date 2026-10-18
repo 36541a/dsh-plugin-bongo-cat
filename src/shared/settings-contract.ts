@@ -35,7 +35,7 @@ export const POSITIONS = ['bottom-right', 'bottom-left', 'top-left', 'top-right'
 export type BongoCatPosition = (typeof POSITIONS)[number]
 
 /** Field kinds the contract knows how to describe and validate. */
-export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position'
+export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position' | 'enum'
 
 export interface FieldMeta {
   kind: FieldKind
@@ -44,6 +44,8 @@ export interface FieldMeta {
   min?: number
   /** inclusive upper bound (natural / number) */
   max?: number
+  /** allowed values for kind 'enum' */
+  values?: readonly string[]
   /** false ⇒ only mutable through dedicated endpoints (e.g. counter via stats/*) */
   writable?: boolean
 }
@@ -56,6 +58,13 @@ export interface FieldMeta {
 export const SETTINGS_FIELDS = {
   /** Master switch; the browser half renders nothing while false. */
   enabled: { kind: 'boolean', default: true },
+  /**
+   * Which cat to draw:
+   *   auto   — the original Steam artwork when it has been extracted, else the built-in SVG cat
+   *   native — the original Steam artwork (falls back to SVG when missing)
+   *   svg    — always the built-in SVG cat
+   */
+  renderer: { kind: 'enum', values: ['auto', 'native', 'svg'], default: 'auto' },
   /** Built-in skin id (see src/client/skins.ts). */
   skin: { kind: 'string', default: 'classic' },
   /** Server-side revision of the imported custom skin image; 0 = none. */
@@ -104,7 +113,7 @@ export const WRITABLE_FIELDS: SettingsKey[] = Object.entries(SETTINGS_FIELDS)
 type DefaultOf<M extends FieldMeta> =
   M extends { kind: 'boolean' } ? boolean
     : M extends { kind: 'position' } ? BongoCatPosition
-      : M extends { kind: 'string' } ? string
+      : M extends { kind: 'string' | 'enum' } ? string
         : number
 export type BongoCatSettings = { [K in SettingsKey]: DefaultOf<(typeof SETTINGS_FIELDS)[K]> }
 
@@ -176,6 +185,14 @@ export function sanitizeSettingsPatch(patch: unknown): SanitizeResult {
         }
         clean[key] = value
         break
+      case 'enum': {
+        const values = meta.values ?? []
+        if (typeof value !== 'string' || !values.includes(value)) {
+          return fail(`${key} must be one of ${values.join(', ')}`)
+        }
+        clean[key] = value
+        break
+      }
     }
   }
   return { ok: true, value: clean as Partial<BongoCatSettings> }

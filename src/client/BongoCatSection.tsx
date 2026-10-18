@@ -5,12 +5,12 @@
  * fields ride the /bongo-cat RPC channel; asset bytes ride
  * skins/import and sounds/import.
  */
-import { useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import { catPreviewSvg } from './cat-svg'
 import { BUILT_IN_SKINS } from './skins'
 import { PRESETS } from './presets'
-import { BongoCatSettings, BongoCatKey, ImportResult, RpcResult, ScannedRoot, skinUrl } from './settings'
+import { BongoCatSettings, BongoCatKey, ImportResult, NativeStatus, RpcResult, ScannedRoot, skinUrl } from './settings'
 import { BongoCatSnapshot, BongoCatStore } from './store'
 import styles from './BongoCatSection.module.css'
 
@@ -64,10 +64,53 @@ export function BongoCatSection(props: BongoCatSectionProps) {
   const [roots, setRoots] = useState<ScannedRoot[] | null>(null)
   const [importedPath, setImportedPath] = useState<string | null>(null)
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null)
+  const [native, setNative] = useState<NativeStatus>({ available: false })
+  const [nativeBusy, setNativeBusy] = useState(false)
+  const [nativeError, setNativeError] = useState<string | null>(null)
   const skinInputRef = useRef<HTMLInputElement>(null)
   const soundInputRef = useRef<HTMLInputElement>(null)
 
   const writable = isLoopback
+
+  const loadNative = async (): Promise<void> => {
+    const result = await rpc.call('/bongo-cat', 'native/status', {}) as RpcResult<NativeStatus>
+    setNative(result.ok ? result.value : { available: false })
+  }
+
+  useEffect(() => {
+    void loadNative()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const importNative = async (): Promise<void> => {
+    setNativeBusy(true)
+    setNativeError(null)
+    try {
+      const result = await rpc.call('/bongo-cat', 'native/import', {}) as RpcResult<NativeStatus>
+      if (!result.ok) throw new Error(result.error.message)
+      setNative(result.value)
+      window.dispatchEvent(new Event('bongo-cat:native-changed'))
+    } catch (err) {
+      setNativeError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setNativeBusy(false)
+    }
+  }
+
+  const removeNative = async (): Promise<void> => {
+    setNativeBusy(true)
+    setNativeError(null)
+    try {
+      const result = await rpc.call('/bongo-cat', 'native/remove', {}) as RpcResult<{ removed: boolean }>
+      if (!result.ok) throw new Error(result.error.message)
+      setNative({ available: false })
+      window.dispatchEvent(new Event('bongo-cat:native-changed'))
+    } catch (err) {
+      setNativeError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setNativeBusy(false)
+    }
+  }
 
   const applyPreset = async (presetId: string, patch: Partial<BongoCatSettings>): Promise<void> => {
     setAppliedPreset(presetId)
@@ -179,6 +222,42 @@ export function BongoCatSection(props: BongoCatSectionProps) {
           onChange={(event) => void store.set({ enabled: event.target.checked })} />
         <span>{t('enabledLabel')}</span>
       </label>
+
+      {/* ── cat source: original Steam artwork ─────────────────── */}
+      <div className={styles.group}>
+        <div className={styles['group-title']}>{t('rendererLabel')}</div>
+        <div className={styles.row}>
+          <select className={styles.select} value={settings.renderer}
+            onChange={(event) => void store.set({ renderer: event.target.value })}>
+            <option value='auto'>{t('rendererAuto')}</option>
+            <option value='native'>{t('rendererNative')}</option>
+            <option value='svg'>{t('rendererSvg')}</option>
+          </select>
+        </div>
+        <div className={styles['group-title']} style={{ fontWeight: 400, opacity: 0.7 }}>{t('nativeLabel')}</div>
+        <div className={styles.row}>
+          <span className={styles.note}>
+            {native.available
+              ? `✓ ${t('nativeReady')} · ${native.skin ?? ''}${native.size ? ` · ${native.size[0]}×${native.size[1]}` : ''}`
+              : t('nativeMissing')}
+          </span>
+        </div>
+        <div className={styles.row}>
+          <button type='button' className={`${styles.btn} ${styles['btn-primary']}`}
+            disabled={!writable || nativeBusy} onClick={() => void importNative()}>
+            {native.available ? t('nativeReimport') : t('nativeImport')}
+          </button>
+          {native.available && (
+            <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
+              disabled={!writable || nativeBusy} onClick={() => void removeNative()}>
+              {t('nativeRemove')}
+            </button>
+          )}
+        </div>
+        <div className={styles.note}>{t('nativeHint')}</div>
+        {nativeBusy && <div className={styles.hint}>{t('nativeBusy')}</div>}
+        {nativeError !== null && <div className={styles.error}>{t('nativeFailed')}: {nativeError}</div>}
+      </div>
 
       {/* ── mood presets ───────────────────────────────────────── */}
       <div className={styles.group}>

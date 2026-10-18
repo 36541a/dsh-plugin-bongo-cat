@@ -17,6 +17,9 @@ export const BONGO_CAT_NS = 'bongo-cat'
 export type BongoCatKey =
   | 'nav' | 'hint' | 'hintToast'
   | 'enabledLabel'
+  | 'rendererLabel' | 'rendererAuto' | 'rendererNative' | 'rendererSvg'
+  | 'nativeLabel' | 'nativeHint' | 'nativeMissing' | 'nativeReady' | 'nativeImport'
+  | 'nativeReimport' | 'nativeRemove' | 'nativeBusy' | 'nativeFailed' | 'nativeSkin'
   | 'skinLabel' | 'builtinLabel' | 'customLabel'
   | 'importSkinButton' | 'removeSkinButton' | 'framesLabel' | 'framesHint'
   | 'scanButton' | 'scanning' | 'scanEmpty' | 'scanHint'
@@ -28,6 +31,21 @@ export type BongoCatKey =
   | 'counterLabel' | 'counterReset'
   | 'eggsLabel' | 'eggFreak' | 'eggSleep' | 'eggPet' | 'eggNight'
   | 'loading' | 'unavailable' | 'remoteWarning' | 'tooLarge' | 'busy'
+
+/** Status of the extracted original (Steam) artwork. */
+export interface NativeStatus {
+  available: boolean
+  skin?: string
+  size?: number[]
+  extractedAt?: string
+  gameDir?: string
+  missing?: string
+}
+
+/** Cache-busted URL of an extracted native frame. */
+export function nativeFrameUrl(frame: 'idle' | 'tap-left' | 'tap-right', stamp: string): string {
+  return `/plugins/bongo-cat/native/${frame}.png?v=${encodeURIComponent(stamp)}`
+}
 
 /** Structural mirror of the host RpcResult envelope. */
 export type RpcResult<T> =

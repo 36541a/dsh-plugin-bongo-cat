@@ -37,7 +37,8 @@
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, extname, basename } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -93,6 +94,9 @@ function buildSettingsSchema(): z.Schema {
         break
       case 'position':
         shape[key] = z.union(['bottom-right', 'bottom-left', 'top-left', 'top-right']).default(m.default as string)
+        break
+      case 'enum':
+        shape[key] = z.union([...(m.values ?? [])]).default(m.default as string)
         break
     }
   }
@@ -416,10 +420,67 @@ export function apply(ctx: Context) {
   const dir = dataDir()
   const skinsDir = join(dir, 'skins')
   const soundsDir = join(dir, 'sounds')
+  const nativeDir = join(dir, 'native')
   const skinMetaPath = join(skinsDir, 'skin.json')
   const soundMetaPath = join(soundsDir, 'sound.json')
   mkdirSync(skinsDir, { recursive: true })
   mkdirSync(soundsDir, { recursive: true })
+
+  /** Extracted original-artwork frames (see tools/extract-native.py). */
+  const NATIVE_FRAMES = ['idle', 'tap-left', 'tap-right'] as const
+  const NATIVE_CONTENT_TYPES: Record<string, string> = { '.png': 'image/png' }
+  const extractorPath = fileURLToPath(new URL('../tools/extract-native.py', import.meta.url))
+
+  const readNativeMeta = (): {
+    available: boolean
+    skin?: string
+    size?: number[]
+    extractedAt?: string
+    gameDir?: string
+    missing?: string
+  } => {
+    const meta = readJson<Record<string, unknown>>(join(nativeDir, 'native.json'))
+    const missing = NATIVE_FRAMES.filter((frame) => !existsSync(join(nativeDir, `${frame}.png`)))
+    if (meta === null || missing.length > 0) {
+      return { available: false, ...(missing.length > 0 ? { missing: missing.join(', ') } : {}) }
+    }
+    return {
+      available: true,
+      skin: typeof meta.skin === 'string' ? meta.skin : undefined,
+      size: Array.isArray(meta.size) ? (meta.size as number[]) : undefined,
+      extractedAt: typeof meta.extractedAt === 'string' ? meta.extractedAt : undefined,
+      gameDir: typeof meta.gameDir === 'string' ? meta.gameDir : undefined
+    }
+  }
+
+  /** Run a command, collecting stdout/stderr; never throws. */
+  const runCommand = (command: string, args: string[], timeoutMs: number): Promise<{ status: number | null; out: string }> => {
+    return new Promise((resolveRun) => {
+      const child = spawn(command, args, { windowsHide: true })
+      let out = ''
+      const timer = setTimeout(() => { child.kill() }, timeoutMs)
+      child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+      child.stderr?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+      child.on('error', (error) => {
+        clearTimeout(timer)
+        resolveRun({ status: -1, out: String(error) })
+      })
+      child.on('close', (status) => {
+        clearTimeout(timer)
+        resolveRun({ status, out })
+      })
+    })
+  }
+
+  /** Find a Python that can import UnityPy (Pillow ships with it). */
+  const findPython = async (): Promise<string | null> => {
+    const candidates = [process.env.DSH_BC_PYTHON, 'python', 'python3', 'py'].filter((item): item is string => typeof item === 'string' && item.length > 0)
+    for (const candidate of candidates) {
+      const result = await runCommand(candidate, ['-c', 'import UnityPy, PIL; print("ok")'], 20000)
+      if (result.status === 0 && result.out.includes('ok')) return candidate
+    }
+    return null
+  }
 
   const readJson = <T,>(path: string): T | null => {
     try {
@@ -613,10 +674,48 @@ export function apply(ctx: Context) {
         }
       }
 
+      case 'native/status': {
+        return ok(readNativeMeta())
+      }
+
+      case 'native/import': {
+        if (!existsSync(extractorPath)) {
+          return failInternal(`extractor not found at ${extractorPath}`)
+        }
+        const python = await findPython()
+        if (python === null) {
+          return failBadRequest(
+            '未找到可用的 Python + UnityPy。请安装 Python 3.10+ 后执行 pip install UnityPy，' +
+            '或用 DSH_BC_PYTHON 环境变量指定解释器。'
+          )
+        }
+        const requested = (typeof payload === 'object' && payload !== null ? (payload as { skin?: unknown }).skin : undefined)
+        const skin = typeof requested === 'string' && /^[A-Za-z0-9.]{1,64}$/.test(requested) ? requested : null
+        const args = [extractorPath, '--out', nativeDir]
+        if (skin !== null) args.push('--skin', skin)
+        const result = await runCommand(python, args, 180000)
+        if (result.status !== 0) {
+          return failBadRequest(`提取失败：${result.out.slice(-600) || `exit ${result.status}`}`)
+        }
+        const meta = readNativeMeta()
+        if (!meta.available) return failInternal('提取脚本已运行，但未产出完整帧')
+        return ok(meta)
+      }
+
+      case 'native/remove': {
+        try {
+          rmSync(nativeDir, { recursive: true, force: true })
+          return ok({ removed: true })
+        } catch (error) {
+          return failInternal(String(error))
+        }
+      }
+
       case 'info': {
         return ok({
           skin: readSkinMeta() ?? { revision: 0 },
-          sound: readSoundMeta() ?? { revision: 0 }
+          sound: readSoundMeta() ?? { revision: 0 },
+          native: readNativeMeta()
         })
       }
 
@@ -674,6 +773,50 @@ export function apply(ctx: Context) {
   }), 'bongo-cat: skin route')
 
   // ── GET /plugins/bongo-cat/sound?v=<revision> ──────────────────────
+  // ── GET /plugins/bongo-cat/native/<frame>.png?v=<stamp> ────────────
+  // Serves the extracted original artwork (see tools/extract-native.py).
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/plugins/bongo-cat/native',
+    handler: (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'text/plain' })
+        res.end('method not allowed')
+        return
+      }
+      let pathname: string
+      try {
+        pathname = new URL(req.url ?? '/', 'http://bongo-cat.local').pathname
+      } catch {
+        pathname = ''
+      }
+      const match = /^\/plugins\/bongo-cat\/native\/([a-z-]+)\.png$/.exec(pathname)
+      const frame = match === null ? '' : match[1]
+      if (!(NATIVE_FRAMES as readonly string[]).includes(frame)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const file = join(nativeDir, `${frame}.png`)
+      if (!existsSync(file)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const size = statSync(file).size
+      res.writeHead(200, {
+        'Content-Type': NATIVE_CONTENT_TYPES['.png'],
+        'Content-Length': String(size),
+        'Cache-Control': 'private, max-age=31536000, immutable'
+      })
+      if (req.method === 'HEAD') {
+        res.end()
+        return
+      }
+      createReadStream(file).pipe(res)
+    }
+  }), 'bongo-cat: native frame route')
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: '/plugins/bongo-cat/sound',

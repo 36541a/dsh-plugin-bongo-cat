@@ -14,13 +14,14 @@ import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/cli
 import { CAT_SVG, paletteVars, decoValue } from './cat-svg'
 import { findSkin } from './skins'
 import { BongoSound } from './sound'
-import { BongoCatSettings, RpcResult, skinUrl, soundUrl } from './settings'
+import { BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
 import { BongoCatStore } from './store'
 import styles from './cat.module.css'
 
 const ROOT_ID = 'dsh-bongo-cat-root'
 const BASE_WIDTH = 150
 const TAP_MS = 130
+const NATIVE_FRAMES = ['idle', 'tap-left', 'tap-right'] as const
 const FREAK_WINDOW_MS = 1500
 const FREAK_MIN_TAPS = 8
 const FREAK_DURATION_MS = 2500
@@ -84,32 +85,51 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   // ── DOM ───────────────────────────────────────────────────────
   const root = document.createElement('div')
   root.id = ROOT_ID
-  root.className = styles.root
+  root.className = styles['bc-root']
   root.dataset.plugin = 'dsh-plugin-bongo-cat'
 
   const stage = document.createElement('div')
-  stage.className = styles.stage
+  stage.className = styles['bc-stage']
 
   const sprite = document.createElement('div')
-  sprite.className = styles.sprite
+  sprite.className = styles['bc-sprite']
+
+  // ── native (original Steam artwork) layer ─────────────────────
+  const nativeWrap = document.createElement('div')
+  nativeWrap.className = styles['bc-native']
+  nativeWrap.dataset.role = 'bongo-cat-native'
+  const nativeImgs: Partial<Record<(typeof NATIVE_FRAMES)[number], HTMLImageElement>> = {}
+  for (const frame of NATIVE_FRAMES) {
+    const img = document.createElement('img')
+    img.className = styles['bc-native-img']
+    img.dataset.frame = frame
+    img.alt = ''
+    img.draggable = false
+    img.addEventListener('load', () => {
+      if (settings !== null && !disposed) applyPosition(settings)
+    })
+    nativeImgs[frame] = img
+    nativeWrap.append(img)
+  }
+  nativeWrap.dataset.active = 'idle'
 
   const svgHost = document.createElement('div')
   svgHost.innerHTML = CAT_SVG
   const svg = svgHost.firstElementChild
 
   const badge = document.createElement('div')
-  badge.className = styles.badge
+  badge.className = styles['bc-badge']
   badge.dataset.role = 'bongo-cat-counter'
   const drum = document.createElement('span')
-  drum.className = styles['badge-drum']
+  drum.className = styles['bc-badge-drum']
   drum.textContent = '🥁'
   const count = document.createElement('span')
-  count.className = styles['badge-count']
+  count.className = styles['bc-badge-count']
   count.textContent = '0'
   badge.append(drum, count)
 
   if (svg !== null) stage.append(svg)
-  stage.append(sprite, badge)
+  stage.append(sprite, nativeWrap, badge)
   root.append(stage)
   document.body.append(root)
 
@@ -126,6 +146,9 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let sessionTaps = 0
   let lastInputAt = Date.now()
   const recentTaps: number[] = []
+  let nativeStatus: NativeStatus = { available: false }
+  let nativeStamp = ''
+  let nativeFrame: (typeof NATIVE_FRAMES)[number] = 'idle'
 
   const cls = (name: string): string => styles[name] ?? name
 
@@ -190,6 +213,40 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     root.style.setProperty('--bc-speed', String(Math.min(2.5, Math.max(0.5, next.speed))))
   }
 
+  // ── original artwork (Steam) ──────────────────────────────────
+  const applyNativeSources = (): void => {
+    if (!nativeStatus.available) return
+    const stamp = nativeStamp || nativeStatus.extractedAt || '1'
+    for (const frame of NATIVE_FRAMES) {
+      const img = nativeImgs[frame]
+      if (!img) continue
+      const url = nativeFrameUrl(frame, stamp)
+      if (img.getAttribute('src') !== url) img.src = url
+    }
+  }
+
+  const applyMode = (next: BongoCatSettings): void => {
+    const useNative = next.renderer !== 'svg' && nativeStatus.available
+    root.classList.toggle(cls('bc-native-mode'), useNative)
+    nativeWrap.style.display = useNative ? '' : 'none'
+    if (useNative) applyNativeSources()
+  }
+
+  const setNativeFrame = (frame: (typeof NATIVE_FRAMES)[number]): void => {
+    if (nativeFrame === frame) return
+    nativeFrame = frame
+    nativeWrap.dataset.active = frame
+  }
+
+  const refreshNative = async (): Promise<void> => {
+    const result = await rpc.call('/bongo-cat', 'native/status', {}) as RpcResult<NativeStatus>
+    nativeStatus = result.ok ? result.value : { available: false }
+    nativeStamp = nativeStatus.extractedAt ?? ''
+    if (disposed || settings === null) return
+    applyMode(settings)
+    applyPosition(settings)
+  }
+
   const applyNight = (): void => {
     const hour = new Date().getHours()
     const night = settings?.eggNight === true && (hour >= 23 || hour < 6)
@@ -212,6 +269,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     applyPosition(next)
     applyBadge(next)
     applySound(next)
+    applyMode(next)
     applyNight()
     root.style.display = next.enabled ? '' : 'none'
     maybeShowHint(next)
@@ -224,7 +282,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
       hintToastTimer = null
       if (disposed || settings === null || settings.hintSeen) return
       const toast = document.createElement('div')
-      toast.className = styles.toast
+      toast.className = styles['bc-toast']
       toast.dataset.role = 'bongo-cat-hint'
       toast.textContent = t ? t('hintToast') : '打字、点鼠标，猫就会敲起来！'
       root.append(toast)
@@ -239,9 +297,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     // force reflow so rapid alternating taps restart the transition
     void root.offsetWidth
     root.classList.add(cls(`bc-tap-${side}`))
+    setNativeFrame(side === 'left' ? 'tap-left' : 'tap-right')
     if (tapTimer !== null) window.clearTimeout(tapTimer)
     tapTimer = window.setTimeout(() => {
       root.classList.remove(cls('bc-tap-left'), cls('bc-tap-right'), cls('bc-tap-both'))
+      setNativeFrame('idle')
       tapTimer = null
     }, TAP_MS)
   }
@@ -454,6 +514,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   stage.addEventListener('click', onStageClick)
   window.addEventListener('pagehide', () => { void stats.flush() })
 
+  // the settings panel fires this after importing / removing the original art
+  const onNativeChanged = (): void => { void refreshNative() }
+  window.addEventListener('bongo-cat:native-changed', onNativeChanged)
+  void refreshNative()
+
   // initial paint from whatever the store already holds
   const initial = store.getSnapshot()
   if (initial.status === 'ready' && initial.value !== undefined) paint(initial.value)
@@ -468,6 +533,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     window.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('pointerdown', onPointerDown, true)
     document.removeEventListener('visibilitychange', onVisibilityChange)
+    window.removeEventListener('bongo-cat:native-changed', onNativeChanged)
     window.removeEventListener('resize', onResize)
     stage.removeEventListener('pointerdown', onStagePointerDown)
     stage.removeEventListener('pointermove', onStagePointerMove)

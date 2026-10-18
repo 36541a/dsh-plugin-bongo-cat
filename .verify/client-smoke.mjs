@@ -64,6 +64,15 @@ const connection = {
         serverState.counter = 0
         return { ok: true, value: { counter: 0 } }
       }
+      if (method === 'native/status') {
+        return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], extractedAt: 'test-stamp' } }
+      }
+      if (method === 'native/import') {
+        return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], extractedAt: 'test-stamp' } }
+      }
+      if (method === 'native/remove') {
+        return { ok: true, value: { removed: true } }
+      }
       return { ok: false, error: { code: 'bad-request', message: `unexpected ${method}` } }
     }
   }
@@ -161,17 +170,28 @@ check('counter badge rendered', el?.querySelector('div') !== null)
 check('cat positioned from defaults', el?.style.left !== '' && el?.style.top !== '')
 check('plugin css style tag injected', document.querySelector('style[data-plugin-css^="dsh-plugin-bongo-cat/"]') !== null)
 
+console.log('— original artwork mode —')
+const nativeWrap = el?.querySelector('[data-role="bongo-cat-native"]')
+check('native layer mounted', nativeWrap !== null)
+check('native mode active when assets available', (el?.className ?? '').includes('bc-native-mode'), el?.className ?? '')
+check('native frames preloaded', nativeWrap?.querySelectorAll('img[data-frame]').length === 3)
+const idleImg = nativeWrap?.querySelector('img[data-frame="idle"]')
+check('idle frame URL points at the asset route', (idleImg?.getAttribute('src') ?? '').includes('/plugins/bongo-cat/native/idle.png'), idleImg?.getAttribute('src') ?? '')
+check('idle frame active by default', nativeWrap?.getAttribute('data-active') === 'idle')
+
 console.log('— typing interaction —')
 const keyBefore = serverState.counter
 window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }))
 const tapClass = (el?.className ?? '').split(/\s+/).some((c) => c.includes('bc-tap-'))
 check('keydown triggers a paw tap class', tapClass, el?.className ?? '')
+check('keydown swaps the native frame', nativeWrap?.getAttribute('data-active') !== 'idle', nativeWrap?.getAttribute('data-active') ?? '')
 await sleep(10)
 check('counter badge counts the tap', el?.textContent?.includes('1') === true, el?.textContent ?? '')
 
 await sleep(200)
 const stillTapping = (el?.className ?? '').split(/\s+/).some((c) => c.includes('bc-tap-'))
 check('tap class auto-clears', !stillTapping)
+check('native frame returns to idle', nativeWrap?.getAttribute('data-active') === 'idle')
 
 console.log('— click interaction —')
 document.body.dispatchEvent(new window.MouseEvent('pointerdown', { button: 0, bubbles: true }))
@@ -222,6 +242,13 @@ check('tabby deco gate set (stripes)', el?.dataset.deco === 'stripes', el?.datas
 await payload.store.set({ size: 2 })
 await sleep(10)
 check('size change resizes stage', el?.firstElementChild?.style.width === '300px', el?.firstElementChild?.style.width ?? '')
+
+await payload.store.set({ renderer: 'svg' })
+await sleep(10)
+check('renderer=svg turns native mode off', !(el?.className ?? '').includes('bc-native-mode'), el?.className ?? '')
+await payload.store.set({ renderer: 'auto' })
+await sleep(10)
+check('renderer=auto restores native mode', (el?.className ?? '').includes('bc-native-mode'))
 
 await payload.store.set({ showCounter: false })
 await sleep(10)

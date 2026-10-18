@@ -9,7 +9,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
-import { copyFileSync, mkdirSync, mkdtempSync, existsSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -139,6 +139,7 @@ check('settings registered with applies: live', registeredNamespace?.options?.ap
 check('prefix route /bongo-cat registered', prefixRoute() !== undefined)
 check('exact route /plugins/bongo-cat/skin registered', exactRoute('/plugins/bongo-cat/skin') !== undefined)
 check('exact route /plugins/bongo-cat/sound registered', exactRoute('/plugins/bongo-cat/sound') !== undefined)
+check('prefix route /plugins/bongo-cat/native registered', routes.some((r) => r.kind === 'prefix' && r.path === '/plugins/bongo-cat/native'))
 
 console.log('— config —')
 let r = await rpc('config/get')
@@ -223,6 +224,43 @@ check('sound route serves audio/wav', asset.head?.code === 200 && asset.head?.he
 console.log('— info —')
 r = await rpc('info')
 check('info returns asset meta', r.ok === true && r.value.skin.revision === 0 && r.value.sound.revision === 1, JSON.stringify(r))
+
+console.log('— native artwork —')
+let nativeStatus = await rpc('native/status')
+check('native/status reports unavailable before import', nativeStatus.ok === true && nativeStatus.value.available === false)
+
+// simulate a successful extraction by writing the frames into DSH_HOME
+const nativeDir = join(DSH_HOME, 'storages', 'bongo-cat', 'native')
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+mkdirSync(nativeDir, { recursive: true })
+for (const frame of ['idle', 'tap-left', 'tap-right']) {
+  writeFileSync(join(nativeDir, `${frame}.png`), TINY_PNG)
+}
+writeFileSync(join(nativeDir, 'native.json'), JSON.stringify({ skin: 'DefaultBongo', size: [1020, 750], extractedAt: '2026-10-18T18:10:14' }))
+
+nativeStatus = await rpc('native/status')
+check('native/status sees extracted frames', nativeStatus.ok === true && nativeStatus.value.available === true && nativeStatus.value.skin === 'DefaultBongo', JSON.stringify(nativeStatus))
+
+const nativeRoute = routes.find((r) => r.kind === 'prefix' && r.path === '/plugins/bongo-cat/native')
+let nativeAsset = await callRoute(nativeRoute, 'GET', '/plugins/bongo-cat/native/idle.png?v=1')
+check('native route serves idle.png', nativeAsset.head?.code === 200 && nativeAsset.head?.headers?.['Content-Type'] === 'image/png' && nativeAsset.body.length > 0)
+
+nativeAsset = await callRoute(nativeRoute, 'GET', '/plugins/bongo-cat/native/evil.png')
+check('native route rejects unknown frames', nativeAsset.head?.code === 404)
+
+let infoResult = await rpc('info')
+check('info includes native block', infoResult.ok === true && infoResult.value.native?.available === true)
+
+let removed = await rpc('native/remove')
+check('native/remove clears the frames', removed.ok === true)
+nativeStatus = await rpc('native/status')
+check('native/status unavailable after removal', nativeStatus.ok === true && nativeStatus.value.available === false)
+
+console.log('— renderer enum —')
+let rendererOk = await rpc('config/set', { patch: { renderer: 'native' } })
+check('config/set accepts renderer=native', rendererOk.ok === true && rendererOk.value.renderer === 'native', JSON.stringify(rendererOk))
+let rendererBad = await rpc('config/set', { patch: { renderer: 'bogus' } })
+check('config/set rejects unknown renderer', rendererBad.ok === false)
 
 console.log('— bad requests —')
 r = await rpc('nope/unknown')

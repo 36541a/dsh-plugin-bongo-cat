@@ -314,6 +314,36 @@
   font-weight: 600;
 }
 
+/* ── original Steam artwork layer ────────────────────────────── */
+.bc-native {
+  display: none;
+  position: relative;
+  width: 100%;
+  line-height: 0;
+}
+
+.bc-root.bc-native-mode .bc-native {
+  display: block;
+}
+
+.bc-root.bc-native-mode .bc-svg {
+  display: none;
+}
+
+.bc-native-img {
+  display: none;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.bc-native[data-active='idle'] .bc-native-img[data-frame='idle'],
+.bc-native[data-active='tap-left'] .bc-native-img[data-frame='tap-left'],
+.bc-native[data-active='tap-right'] .bc-native-img[data-frame='tap-right'] {
+  display: block;
+}
+
 /* ── custom sprite-sheet skin ────────────────────────────────── */
 .bc-sprite {
   display: none;
