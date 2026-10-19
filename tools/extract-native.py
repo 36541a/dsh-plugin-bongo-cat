@@ -64,15 +64,16 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
-# Right-tap swing. CatRightPunch is only the impact effect (arc + dashes) —
+# Right-tap press. CatRightPunch is only the impact effect (arc + dashes) —
 # the game rotates the paw NODE at runtime, so no sprite holds the "paw down"
-# pose. Produce it here: swing the paw around its wrist, pinning the wrist so
-# the paw stays attached to the body, and drop the impact dashes past the tip.
-# Pivot/tip are fractions of the paw sprite so every skin swings the same way.
-PAW_SWING_DEG = -50.0
-PAW_PIVOT_FRAC = (0.45, 0.92)   # the wrist: lower-left of the paw sprite
-PAW_TIP_FRAC = (0.55, 0.08)     # the paw's upper corner
-DASH_FROM_TIP = (34, 52)        # dash centroid, unscaled canvas px past the tip
+# pose. Produce it here: swing the paw slightly and press it straight down
+# beside the face (the reference is the game's own counter shot), keeping the
+# wrist in the body's overlap so nothing detaches, and put the impact dashes
+# to the paw's right. Pivot is a fraction of the paw sprite so every skin
+# swings the same way.
+PAW_SWING_DEG = -30.0
+PAW_PRESS = (4, 14)             # extra down-right press after the swing (unscaled px)
+DASH_FROM_PAW = (46, 2)         # dash centroid, unscaled px right of the paw centre
 # Connected components smaller than this are the impact dashes; anything
 # larger is the swoosh, which only makes sense against a drum.
 DASH_MAX_AREA = 400
@@ -285,30 +286,34 @@ def compose(
         return img, x * scale, y * scale
 
     def swing(canvas: Image.Image) -> None:
-        """Right hit: rotate the paw down around its wrist, dashes past the tip.
+        """Right hit: press the paw down beside the face, dashes at its right.
 
         The game swings the paw NODE at runtime — <Skin>RightPunch is only the
-        impact effect — so the down pose has to be produced here. The wrist
-        stays at its idle spot, the palm swings out to the right, and the
-        impact dashes land just past the tip, mirroring the left punch's read.
+        impact effect — so the down pose has to be produced here. A mild swing
+        plus a straight downward press keeps the paw in place (matching the
+        game's own counter shot), with the wrist still inside the body's
+        overlap so nothing detaches.
         """
         paw_img, (rx, ry, rw, rh) = parts["CatRight"]
         big = paw_img.resize((paw_img.width * scale, paw_img.height * scale), Image.LANCZOS)
         base = (ORIGIN["paw"][0] + rx, ORIGIN["paw"][1] + (256 - ry - rh))
-        pivot = (rw * PAW_PIVOT_FRAC[0] * scale, rh * PAW_PIVOT_FRAC[1] * scale)
+        pivot = (rw * 0.45 * scale, rh * 0.92 * scale)
         swung, forward = rotate_about(big, PAW_SWING_DEG, pivot)
         where = forward(pivot)
-        target = ((base[0] + rw * PAW_PIVOT_FRAC[0]) * scale, (base[1] + rh * PAW_PIVOT_FRAC[1]) * scale)
+        target = (
+            (base[0] + rw * 0.45 + PAW_PRESS[0]) * scale,
+            (base[1] + rh * 0.92 + PAW_PRESS[1]) * scale,
+        )
         canvas.alpha_composite(swung, (int(round(target[0] - where[0])), int(round(target[1] - where[1]))))
-        # the tip travels with the paw; drop the dashes just past it
-        tip_out = forward((rw * PAW_TIP_FRAC[0] * scale, rh * PAW_TIP_FRAC[1] * scale))
-        tip_canvas = (target[0] - where[0] + tip_out[0], target[1] - where[1] + tip_out[1])
+        # dashes sit to the paw's right, at pad height
+        center_out = forward((rw * 0.5 * scale, rh * 0.5 * scale))
+        paw_center = (target[0] - where[0] + center_out[0], target[1] - where[1] + center_out[1])
         dash_img, _ = parts["Dashes"]
         dash_big = dash_img.resize((dash_img.width * scale, dash_img.height * scale), Image.LANCZOS)
         cx, cy = alpha_centroid(dash_img)
         dash_pos = (
-            tip_canvas[0] + DASH_FROM_TIP[0] * scale - cx * scale,
-            tip_canvas[1] + DASH_FROM_TIP[1] * scale - cy * scale,
+            paw_center[0] + DASH_FROM_PAW[0] * scale - cx * scale,
+            paw_center[1] + DASH_FROM_PAW[1] * scale - cy * scale,
         )
         canvas.alpha_composite(dash_big, (int(round(dash_pos[0])), int(round(dash_pos[1]))))
 
