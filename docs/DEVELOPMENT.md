@@ -27,7 +27,7 @@
 
 | 组件 | 版本 |
 |---|---|
-| DeepSeek Harness | **0.2.x**（web profile；`engines.dsh` 声明 `>=0.2.0-rc.1 <0.3.0`） |
+| DeepSeek Harness | **0.2.x**（web profile；`engines.dsh` 声明 `>=0.1.1-rc.2 <0.3.0`，0.1.1-rc.2 实测可用） |
 | Node.js | ≥ 22 |
 | pnpm | ≥ 9（≥10 时见下方注意） |
 | 操作系统 | Windows 10/11（Steam 扫描为 Windows 专属，其他平台自动降级） |
@@ -396,7 +396,7 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（49 项，含契约对账与 RPC 信封）；⑥ browser 冒烟（39 项，jsdom 里跑真实产物）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（54 项，含契约对账、RPC 信封与 loopback 写保护）；⑥ browser 冒烟（39 项，jsdom 里跑真实产物）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 

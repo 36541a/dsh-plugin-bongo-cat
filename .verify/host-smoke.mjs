@@ -46,12 +46,19 @@ apply(ctx)
 /* synthetic req/res over the registered routes                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Peer address the next synthetic request arrives as. Loopback by default;
+ * tests flip it to prove the filesystem endpoints refuse another machine.
+ */
+let peerAddress = '127.0.0.1'
+
 function callRoute(route, method, url, payload, rpcMethod) {
   return new Promise((resolve, reject) => {
     const req = new EventEmitter()
     req.method = method
     req.url = url
     req.headers = { 'content-type': 'application/json' }
+    req.socket = { remoteAddress: peerAddress }
     req.destroy = () => {}
 
     const chunks = []
@@ -208,6 +215,21 @@ check('skin route 404s stale revision', asset.head?.code === 404)
 console.log('— skin import (path) security —')
 r = await rpc('skins/import', { path: 'C:\\Windows\\win.ini', name: 'evil.png' })
 check('skins/import rejects path outside scanned roots', r.ok === false && /outside the scanned/.test(r.error?.message ?? ''), JSON.stringify(r))
+
+console.log('— loopback-only write guard —')
+peerAddress = '10.0.0.5'
+const remoteImport = await rpc('skins/import', { data: PNG_B64, name: 'from-lan.png' })
+check('another machine cannot import a skin', remoteImport.ok === false && remoteImport.error?.code === 'forbidden', JSON.stringify(remoteImport).slice(0, 160))
+const remoteRemove = await rpc('skins/remove')
+check('another machine cannot remove a skin', remoteRemove.ok === false && remoteRemove.error?.code === 'forbidden', JSON.stringify(remoteRemove).slice(0, 160))
+const remoteNative = await rpc('native/remove')
+check('another machine cannot remove native assets', remoteNative.ok === false && remoteNative.error?.code === 'forbidden', JSON.stringify(remoteNative).slice(0, 160))
+const remoteSettings = await rpc('config/get')
+check('settings stay readable for the floating pet', remoteSettings.ok === true, JSON.stringify(remoteSettings).slice(0, 120))
+peerAddress = '::1'
+const ipv6Import = await rpc('skins/import', { data: PNG_B64, name: 'ipv6.png' })
+check('IPv6 loopback counts as this machine', ipv6Import.ok === true, JSON.stringify(ipv6Import).slice(0, 160))
+peerAddress = '127.0.0.1'
 
 r = await rpc('skins/remove')
 const afterRemove = await rpc('config/get')

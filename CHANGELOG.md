@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.1 — 2026-10-20
+
+**修掉隔离环境验收里挖出的五个真问题**（详见 `dsh-plugin-bongo-cat-0.7.0-验证报告.md`）：
+
+- **P0 致命：一个坏资产能打挂整个 dsh**。四条资产路由都是 `createReadStream(file).pipe(res)`，没有 `error` 监听；路径被目录占位、ACL 拒绝、共享盘断连时，`EISDIR` 成为进程级未捕获异常，`dsh web` 直接退出。现在统一走 `pipeFile()`（挂 `error`，未发头则 500、已发头则收尾），并在 `statSync` 处用 `assetSize()` 校验 `isFile()`，不可读路径一律 404
+- **P1：导入失败会吃掉上一张皮肤**。`importAsset` 原先「写元数据 → rename」，rename 一失败元数据就指向不存在的文件，旧皮肤永久 404。现在改为「写 tmp → rename 到位 → 再原子写元数据」，元数据失败时回滚刚落的文件
+- **P1：README 承诺的“仅本机可写”没有服务端实现**。`/bongo-cat` 的 6 个文件系统端点（`skins/*`、`sounds/*`、`native/import|remove`）增加 loopback 校验，非本机请求返回 `forbidden`；`config/*`、`stats/*` 保持原样（悬浮猫自己要用）
+- **P2：解释器坏掉时返回 500 纯文本**。`spawn` 对非法 PE 会**同步抛出**，原先直接穿透到 `serveRpc` 的兜底 500，破坏 RPC 信封；现在 `runCommand` 捕获并归一为 `{status:-1}`。同时 `resolvePython` 不再只 `existsSync(venvPython)` 就返回——先探测 `import UnityPy`，坏了就删掉重建（进程内缓存探测结果）
+- **P3：并发 `native/import` 静默丢结果**。加互斥，第二个请求返回 `bad-request: extraction already running`，不再让两次提取互相覆盖帧
+- **P3：超大请求体改为 413**。25 MB 包原先直接 `req.destroy()`，客户端只看到 `ECONNRESET`；现在回 `413 request body is too large` 再关闭，并停止继续累积分片
+- 文档：`engines.dsh` 放宽为 `>=0.1.1-rc.2 <0.3.0`，README 不再声称“0.1.x 不支持”——实测 `0.1.1-rc.2` 装完悬浮层正常挂载
+
+回归：`pnpm typecheck` 绿，硬档 20 + 54 + 39 = 113 项断言仍全绿；隔离环境 44 项 host 断言通过，故障注入里 P0 由“进程退出”变为“404 + 服务存活”。
+
 ## 0.7.0 — 2026-10-20
 
 **适配 DSH 0.2.0**（行为不变，只换内核契约）。0.2.0 把客户端插件系统换了一整套：`dsh-client-runtime` 被并进 `@deepseek-ai/cordis`，模块表改由 `dsh-client-modules` 组装，RPC handler 多了一个 `peer` 参数。逐条对齐如下：

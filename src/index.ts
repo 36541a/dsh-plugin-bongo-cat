@@ -96,6 +96,29 @@ interface ScannedRoot {
 /** Channel path; the browser half calls `connection.rpc.call(CHANNEL, …)`. */
 const CHANNEL = '/bongo-cat'
 
+/**
+ * Endpoints that write into the plugin's storage (file copies and deletes).
+ *
+ * The README promises these are reachable from this machine only. That has to
+ * be enforced here: the browser half merely disables its buttons when
+ * `connection.isLoopback` is false, which stops nobody with curl. Everything
+ * that only edits the settings document (config/*, stats/*) stays callable —
+ * it is what the floating pet itself writes.
+ */
+const LOOPBACK_ONLY_ENDPOINTS = new Set([
+  'skins/import',
+  'skins/remove',
+  'sounds/import',
+  'sounds/remove',
+  'native/import',
+  'native/remove'
+])
+
+/** True only for an address the OS reports for the local machine. */
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
 /** Endpoint segment rule, copied from dsh-client-connection's wire contract. */
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
@@ -148,17 +171,22 @@ function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolveBody, rejectBody) => {
     const chunks: Buffer[] = []
     let size = 0
+    let settled = false
     req.on('data', (chunk: Buffer) => {
+      if (settled) return
       size += chunk.length
       if (size > MAX_RPC_BODY_BYTES) {
-        rejectBody(new Error('request body is too large'))
-        req.destroy()
+        // Do not destroy the socket here: the caller still has to write 413.
+        // Destruction wins the race against the response and the browser only
+        // sees ECONNRESET, which reads as "server crashed" instead of "too big".
+        settled = true
+        rejectBody(Object.assign(new Error('request body is too large'), { code: 'body-too-large' }))
         return
       }
       chunks.push(chunk)
     })
-    req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')))
-    req.on('error', rejectBody)
+    req.on('end', () => { if (!settled) resolveBody(Buffer.concat(chunks).toString('utf8')) })
+    req.on('error', (error) => { if (!settled) rejectBody(error) })
   })
 }
 
@@ -167,6 +195,48 @@ function respond(res: ServerResponse, rpcId: string, result: HandlerResult): voi
   const text = JSON.stringify({ type: 'server-response', rpcId, result })
   res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(text)) })
   res.end(text)
+}
+
+/**
+ * Stat an asset path and answer 404 unless it is a regular file.
+ *
+ * `existsSync` alone lets a *directory* squatting on the asset name through
+ * (and, on Windows, a locked file whose content cannot be opened). Answering
+ * before the read keeps the failure at the HTTP layer instead of the stream.
+ *
+ * @returns the file size, or undefined when the caller should stop.
+ */
+function assetSize(res: ServerResponse, file: string): number | undefined {
+  let stat
+  try {
+    stat = statSync(file)
+  } catch {
+    stat = undefined
+  }
+  if (stat === undefined || !stat.isFile()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' })
+    res.end('not found')
+    return undefined
+  }
+  return stat.size
+}
+
+/**
+ * Stream one regular file into a response whose headers are already written.
+ *
+ * `stream.pipe(res)` never subscribes to the source's `error` event, and an
+ * unhandled 'error' on a ReadStream is an *uncaught exception* — a directory on
+ * the asset path, an ACL denial, or a share dropping between `statSync` and
+ * `open()` used to take the whole harness process down. Answer 500 while the
+ * headers are still unsent and simply close the response otherwise.
+ */
+function pipeFile(res: ServerResponse, file: string): void {
+  const stream = createReadStream(file)
+  stream.on('error', () => {
+    if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' })
+    res.end('asset read failed')
+  })
+  stream.pipe(res)
 }
 
 /**
@@ -201,7 +271,13 @@ async function serveRpc(req: IncomingMessage, res: ServerResponse, dispatch: Rpc
   let parsed: unknown
   try {
     parsed = JSON.parse(await readBody(req))
-  } catch {
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'body-too-large') {
+      req.resume()
+      res.writeHead(413, { 'Content-Type': 'text/plain', Connection: 'close' })
+      res.end('request body is too large')
+      return
+    }
     res.writeHead(400, { 'Content-Type': 'text/plain' })
     res.end('body is not JSON')
     return
@@ -215,6 +291,10 @@ async function serveRpc(req: IncomingMessage, res: ServerResponse, dispatch: Rpc
   }
   if (message.method !== endpoint) {
     respond(res, rpcId, failBadRequest(`method ${JSON.stringify(message.method)} does not match endpoint ${JSON.stringify(endpoint)}`))
+    return
+  }
+  if (LOOPBACK_ONLY_ENDPOINTS.has(endpoint) && !isLoopbackAddress(req.socket.remoteAddress)) {
+    respond(res, rpcId, failForbidden(`endpoint "${endpoint}" is available from this machine only`))
     return
   }
 
@@ -259,6 +339,10 @@ function failBadRequest(message: string): HandlerResult {
 
 function failInternal(message: string): HandlerResult {
   return { ok: false, error: { code: 'internal', message, details: {} } }
+}
+
+function failForbidden(message: string): HandlerResult {
+  return { ok: false, error: { code: 'forbidden', message, details: {} } }
 }
 
 /** Resolve $DSH_HOME the same way the harness does; default ~/.dsh. */
@@ -419,6 +503,9 @@ export function apply(ctx: Context) {
   const NATIVE_CONTENT_TYPES: Record<string, string> = { '.png': 'image/png' }
   const extractorPath = fileURLToPath(new URL('../tools/extract-native.py', import.meta.url))
 
+  /** One extraction at a time: the extractor rewrites native/ in place. */
+  let nativeImporting = false
+
   const readNativeMeta = (): {
     available: boolean
     skin?: string
@@ -444,7 +531,17 @@ export function apply(ctx: Context) {
   /** Run a command, collecting stdout/stderr; never throws. */
   const runCommand = (command: string, args: string[], timeoutMs: number): Promise<{ status: number | null; out: string }> => {
     return new Promise((resolveRun) => {
-      const child = spawn(command, args, { windowsHide: true })
+      let child: ReturnType<typeof spawn>
+      // Windows raises ENOEXEC/UNKNOWN *synchronously* for a non-executable
+      // image (a truncated or swapped interpreter, an antivirus block), so
+      // spawn() can throw before any listener is attached. Without this catch
+      // the rejection escaped the RPC handler and surfaced as a bare HTTP 500.
+      try {
+        child = spawn(command, args, { windowsHide: true })
+      } catch (error) {
+        resolveRun({ status: -1, out: String(error) })
+        return
+      }
       let out = ''
       const timer = setTimeout(() => { child.kill() }, timeoutMs)
       child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
@@ -494,12 +591,43 @@ export function apply(ctx: Context) {
   }
 
   /**
+   * Discard the plugin-local venv before rebuilding it. The delete itself can
+   * fail — Windows keeps `python.exe` locked while a probe is still tearing
+   * down, an antivirus/policy shim may refuse a bulk delete, a read-only parent
+   * makes rmdir fail — and none of that may escape as an uncaught exception.
+   *
+   * @returns whether the directory is gone.
+   */
+  const discardVenv = (): boolean => {
+    try {
+      rmSync(VENV_DIR, { recursive: true, force: true })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * Resolve a Python that can run the extractor, bootstrapping a plugin-local
    * venv when the interpreter lacks UnityPy. The venv lives next to the
    * plugin's data, so the user's global Python stays untouched.
+   *
+   * The venv is *probed*, not trusted: `existsSync(python.exe)` is true for a
+   * half-built venv, a truncated interpreter, or an antivirus quarantine, and
+   * the old early return made every later import fail with the same opaque
+   * error until the user deleted the directory by hand. A venv that cannot
+   * import UnityPy is rebuilt. The probe runs on every import (a few hundred
+   * ms against an extraction that takes seconds) rather than being cached:
+   * a cached "it worked once" is exactly how an interpreter swap stays
+   * invisible until the process restarts.
    */
   const resolvePython = async (): Promise<{ python: string } | { error: string }> => {
-    if (existsSync(venvPython)) return { python: venvPython }
+    if (existsSync(venvPython)) {
+      if (await probeUnityPy(venvPython, [])) return { python: venvPython }
+      if (!discardVenv()) {
+        return { error: `插件私有 Python 环境已损坏，且无法自动清理（${VENV_DIR}）。请手动删除该目录后重试。` }
+      }
+    }
 
     for (const { cmd, prefix } of pythonCandidates()) {
       if (await probeUnityPy(cmd, prefix)) return { python: cmd }
@@ -515,6 +643,7 @@ export function apply(ctx: Context) {
 
       const pip = await runCommand(venvPython, ['-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'UnityPy'], 420000)
       if (pip.status === 0 && await probeUnityPy(venvPython, [])) return { python: venvPython }
+      discardVenv()
       return { error: `安装 UnityPy 失败：${pip.out.slice(-500) || `exit ${pip.status}`}` }
     }
     return { error: '未找到 Python 3.10+。请安装 Python（勾选 Add to PATH）后重试，或用 DSH_BC_PYTHON 指定解释器。' }
@@ -635,12 +764,26 @@ export function apply(ctx: Context) {
     const revision = (previous?.revision ?? 0) + 1
     const target = join(assetDir, `${kind}-${revision}${ext}`)
     const meta: AssetMeta = { revision, name: basename(name || `${kind}-${revision}${ext}`), source, ext, updatedAt: new Date().toISOString() }
+
+    // Order matters: the bytes must be in place *before* the metadata points at
+    // them. Writing meta first meant a failed rename left the record pointing at
+    // a file that never appeared, so the previously working asset disappeared
+    // from every route until the user re-imported (and rebumped the revision).
     try {
       writeFileSync(target + '.tmp', buffer)
-      writeFileSync(metaPath, JSON.stringify(meta))
       renameSync(target + '.tmp', target)
     } catch (error) {
       rmSync(target + '.tmp', { force: true })
+      return failText(error)
+    }
+    try {
+      // The metadata write is itself atomic (tmp + rename), so a crash here
+      // leaves the old record — and the old revision — fully intact.
+      writeFileSync(metaPath + '.tmp', JSON.stringify(meta))
+      renameSync(metaPath + '.tmp', metaPath)
+    } catch (error) {
+      rmSync(metaPath + '.tmp', { force: true })
+      rmSync(target, { force: true })
       return failText(error)
     }
     return meta
@@ -788,26 +931,36 @@ export function apply(ctx: Context) {
         if (!existsSync(extractorPath)) {
           return failInternal(`extractor not found at ${extractorPath}`)
         }
-        const python = await resolvePython()
-        if ('error' in python) {
-          return failBadRequest(python.error)
+        // The extractor rewrites native/ in place; two concurrent runs would
+        // interleave frames from different skins and the later writer would
+        // silently win. The UI disables its buttons while busy, but the wire
+        // accepts anything, so the exclusion belongs here.
+        if (nativeImporting) return failBadRequest('extraction already running, try again when it finishes')
+        nativeImporting = true
+        try {
+          const python = await resolvePython()
+          if ('error' in python) {
+            return failBadRequest(python.error)
+          }
+          const requested = (typeof payload === 'object' && payload !== null ? (payload as { skin?: unknown }).skin : undefined)
+          const skin = typeof requested === 'string' && /^[A-Za-z0-9.]{1,64}$/.test(requested) ? requested : null
+          const args = [extractorPath, '--out', nativeDir]
+          if (skin !== null) args.push('--skin', skin)
+          const result = await runCommand(python.python, args, 300000)
+          if (result.status !== 0) {
+            return failBadRequest(`提取失败：${result.out.slice(-600) || `exit ${result.status}`}`)
+          }
+          // First successful import also builds the icon catalog for the picker.
+          if (!existsSync(join(nativeDir, 'skins.json'))) {
+            await runCommand(python.python, [extractorPath, '--catalog', '--out', nativeDir], 300000)
+          }
+          if (skin !== null) await scope.update({ skin })
+          const meta = readNativeMeta()
+          if (!meta.available) return failInternal('提取脚本已运行，但未产出完整帧')
+          return ok(meta)
+        } finally {
+          nativeImporting = false
         }
-        const requested = (typeof payload === 'object' && payload !== null ? (payload as { skin?: unknown }).skin : undefined)
-        const skin = typeof requested === 'string' && /^[A-Za-z0-9.]{1,64}$/.test(requested) ? requested : null
-        const args = [extractorPath, '--out', nativeDir]
-        if (skin !== null) args.push('--skin', skin)
-        const result = await runCommand(python.python, args, 300000)
-        if (result.status !== 0) {
-          return failBadRequest(`提取失败：${result.out.slice(-600) || `exit ${result.status}`}`)
-        }
-        // First successful import also builds the icon catalog for the picker.
-        if (!existsSync(join(nativeDir, 'skins.json'))) {
-          await runCommand(python.python, [extractorPath, '--catalog', '--out', nativeDir], 300000)
-        }
-        if (skin !== null) await scope.update({ skin })
-        const meta = readNativeMeta()
-        if (!meta.available) return failInternal('提取脚本已运行，但未产出完整帧')
-        return ok(meta)
       }
 
       case 'native/remove': {
@@ -861,12 +1014,13 @@ export function apply(ctx: Context) {
       const stale = meta === null || meta.revision === 0
         || !Number.isInteger(revision) || revision !== meta.revision
       const file = meta === null ? '' : join(skinsDir, `skin-${meta.revision}${meta.ext}`)
-      if (stale || !existsSync(file)) {
+      if (stale) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
         res.end('not found')
         return
       }
-      const size = statSync(file).size
+      const size = assetSize(res, file)
+      if (size === undefined) return
       res.writeHead(200, {
         'Content-Type': IMAGE_CONTENT_TYPES[meta.ext] ?? 'application/octet-stream',
         'Content-Length': String(size),
@@ -876,7 +1030,7 @@ export function apply(ctx: Context) {
         res.end()
         return
       }
-      createReadStream(file).pipe(res)
+      pipeFile(res, file)
     }
   }), 'bongo-cat: skin route')
 
@@ -902,21 +1056,18 @@ export function apply(ctx: Context) {
       const iconMatch = /^\/plugins\/bongo-cat\/native\/icons\/([A-Za-z0-9.]+)\.png$/.exec(pathname)
       if (iconMatch !== null) {
         const file = join(nativeDir, 'icons', `${iconMatch[1]}.png`)
-        if (!existsSync(file)) {
-          res.writeHead(404, { 'Content-Type': 'text/plain' })
-          res.end('not found')
-          return
-        }
+        const iconSize = assetSize(res, file)
+        if (iconSize === undefined) return
         res.writeHead(200, {
           'Content-Type': 'image/png',
-          'Content-Length': String(statSync(file).size),
+          'Content-Length': String(iconSize),
           'Cache-Control': 'private, max-age=31536000, immutable'
         })
         if (req.method === 'HEAD') {
           res.end()
           return
         }
-        createReadStream(file).pipe(res)
+        pipeFile(res, file)
         return
       }
       const frame = match === null ? '' : match[1]
@@ -926,12 +1077,8 @@ export function apply(ctx: Context) {
         return
       }
       const file = join(nativeDir, `${frame}.png`)
-      if (!existsSync(file)) {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end('not found')
-        return
-      }
-      const size = statSync(file).size
+      const size = assetSize(res, file)
+      if (size === undefined) return
       res.writeHead(200, {
         'Content-Type': NATIVE_CONTENT_TYPES['.png'],
         'Content-Length': String(size),
@@ -941,7 +1088,7 @@ export function apply(ctx: Context) {
         res.end()
         return
       }
-      createReadStream(file).pipe(res)
+      pipeFile(res, file)
     }
   }), 'bongo-cat: native frame route')
 
@@ -964,12 +1111,13 @@ export function apply(ctx: Context) {
       const stale = meta === null || meta.revision === 0
         || !Number.isInteger(revision) || revision !== meta.revision
       const file = meta === null ? '' : join(soundsDir, `sound-${meta.revision}${meta.ext}`)
-      if (stale || !existsSync(file)) {
+      if (stale) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
         res.end('not found')
         return
       }
-      const size = statSync(file).size
+      const size = assetSize(res, file)
+      if (size === undefined) return
       res.writeHead(200, {
         'Content-Type': SOUND_CONTENT_TYPES[meta.ext] ?? 'application/octet-stream',
         'Content-Length': String(size),
@@ -979,7 +1127,7 @@ export function apply(ctx: Context) {
         res.end()
         return
       }
-      createReadStream(file).pipe(res)
+      pipeFile(res, file)
     }
   }), 'bongo-cat: sound route')
 }

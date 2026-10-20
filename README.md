@@ -19,11 +19,11 @@
 - **省电暂停**：页面隐藏时冻结全部动画并挂起音频，切回即恢复
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、清单/模块表核对、双端 108 项断言，push/PR 自动跑
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、清单/模块表核对、双端 113 项断言，push/PR 自动跑
 
 ## 安装
 
-需要 **DeepSeek Harness 0.2.0 及以上的 web profile**（`dsh --version` 应为 `0.2.x`；Node.js ≥ 22）。0.1.x 的内核已无本插件依赖的客户端模块系统，请先升级 dsh。
+需要 **DeepSeek Harness 的 web profile**（Node.js ≥ 22）。实测通过的内核：`0.2.0-rc.2`（主目标）与 `0.1.1-rc.2`（同样能正常挂载）；`0.1.0` 线与 `0.2.1-rc` 未验证，`0.3.x` 尚未发布。
 
 从 GitHub 安装（仓库自带 `lib/` 构建产物，装完即用，无需构建）：
 
@@ -142,7 +142,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + manifest 20 项 + host 49 项 + browser 39 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + manifest 20 项 + host 54 项 + browser 39 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```

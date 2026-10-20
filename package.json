@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-bongo-cat",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "DeepSeek Harness plugin: the original Steam Bongo Cat artwork (app 1337970) as a desktop pet that drums along with your typing and clicks, extracted locally from your own install; skin picker over all 243 skins, synthesized sound and tap counter.",
   "repository": {
     "type": "git",
@@ -41,7 +41,7 @@
     }
   },
   "engines": {
-    "dsh": ">=0.2.0-rc.1 <0.3.0",
+    "dsh": ">=0.1.1-rc.2 <0.3.0",
     "node": ">=22"
   },
   "scripts": {

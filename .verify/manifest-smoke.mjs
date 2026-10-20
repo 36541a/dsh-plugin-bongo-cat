@@ -128,13 +128,16 @@ if (clientRel !== undefined && existsSync(join(ROOT, clientRel))) {
 /* ------------------------------------------------------------------ */
 
 // `engines` is informational to the launcher, but it is the only machine
-// readable statement of which kernel line this build targets. This is a
-// smoke check, not a semver solver: it proves the declaration names the
-// 0.2.0 line rather than the 0.1.x one this plugin no longer builds against.
+// readable statement of which kernel lines this build was verified against:
+// 0.2.0-rc.2 is the primary target, 0.1.1-rc.2 boots the same bundle. This is
+// a smoke check, not a semver solver — it asserts the declared interval still
+// starts at or below 0.2.0 and still pins an upper bound of 0.3.0, so the
+// range can neither lock out the target line nor silently widen to 0.3+.
 const dshEngine = pkg.engines?.dsh
 check(typeof dshEngine === 'string' && dshEngine.length > 0, 'engines.dsh declares the supported kernel line', String(dshEngine))
-check(typeof dshEngine === 'string' && /0\.2\./.test(dshEngine) && !/0\.1\./.test(dshEngine),
-  'engines.dsh targets the 0.2 line only', String(dshEngine))
+const engineFloor = /^>=([^\s]+)\s+<(\d+\.\d+\.\d+)$/.exec(dshEngine ?? '')
+check(engineFloor !== null && engineFloor[2] === '0.3.0' && engineFloor[1] <= '0.2.0',
+  'engines.dsh admits the verified 0.1.1/0.2.x lines and stops at 0.3.0', String(dshEngine))
 
 // Both halves are self-contained (host: node: builtins only, browser: seed
 // modules only), so a peerDependency would never be satisfied by a profile —
