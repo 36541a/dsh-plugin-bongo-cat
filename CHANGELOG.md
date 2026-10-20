@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — 2026-10-20
+
+**适配 DSH 0.2.0**（行为不变，只换内核契约）。0.2.0 把客户端插件系统换了一整套：`dsh-client-runtime` 被并进 `@deepseek-ai/cordis`，模块表改由 `dsh-client-modules` 组装，RPC handler 多了一个 `peer` 参数。逐条对齐如下：
+
+- **清单**：新增 `dsh.manifestVersion: 1` 与 `engines.dsh: ">=0.2.0-rc.1 <0.3.0"`；`dsh.client.inject` 去掉已不存在的 `@deepseek-ai/dsh-client-runtime`（0.2.0 里没有任何包提供它，留着就是一条指向空气的图边）；`exports["./client"]` 保持，0.2.0 的 client-modules 正是靠它定位浏览器半
+- **依赖**：devDependencies 全部对齐 `0.2.0-rc.2`；删掉 0.2.0 已不再发布的 `dsh-client-runtime` / `dsh-client-web-react` / `dsh-host-apiproxy`，新增 `dsh-client-ui-renderer`（`ctx.slots` 的类型增强在这个包里）；删除 `peerDependencies`——两端产物都不在运行时 import `@deepseek-ai/cordis`，留着只会让 profile 的 pnpm 每次报 "missing peer"
+- **客户端上下文**：`ClientContext` 从 `@deepseek-ai/dsh-client-runtime/client` 改为 `@deepseek-ai/cordis` 的 `Context`；`ctx.slots` / `ctx.locale` 改为通过 `dsh-client-ui-renderer/client`、`dsh-client-locale/client` 的类型增强获得
+- **host 端 RPC 契约**：0.2.0 的 `ConnectionRpcHandler` 多了一个尾部 `peer: PeerScope`。插件自带 `/bongo-cat` 前缀路由，不经过 `ctx.connection.rpc.handle()`，因此改用本地的三参 `RpcDispatch`，并留一条编译期断言（`Assignable<RpcDispatch, ConnectionRpcHandler>`）——将来内核再改签名，`pnpm typecheck` 会先红，而不是用户先撞上
+- **构建**：`PLATFORM_MODULES` 换成 0.2.0 web shell 真实播种的那张表（`react*`、`cordis`、`client-store`、`ui-slots`、`ui-primitives`、`ui-dockkit`），删掉 0.2.0 已无的 `dsh-client-web-react` / `ui-attachment` / `schema-form`
+- **新增守卫** `.verify/manifest-smoke.mjs`（硬档）：校验 bundle 层/客户端导出/inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线
+- **新增工具** `tools/verify-install.mjs`：装完对着 `dsh web` 打印的地址跑一遍，直接确认「引导图里有这一行 + 组合脚本真的带上了浏览器半 + `/bongo-cat` RPC 正常应答」
+- 顺带修掉三处被新类型暴露出来的旧问题：设置页「读取失败」态判断写成了不存在的 `'error'`（应为 `'unavailable'`）、`event.target` 的 Node 收窄改为跨 realm 安全的断言（`instanceof` 在 jsdom/iframe 里会反过来）、`readdirSync` 的 `Dirent` 标注跟随 `@types/node` 24
+
+实测（Windows 11 / Node 22 / dsh 0.2.0-rc.2，全新 `$DSH_HOME`）：`dsh plugin --profile web add` 后 profile 自动把包加进 `dsh.profile.bundles`，重启 `dsh web` 即出现「设置 → 邦哥猫」与右下角猫咪，无需任何手工配置；无 peer 警告、无控制台报错。回归：`pnpm typecheck` 绿，硬档 20 + 49 + 39 = 108 项断言全绿。
+
 ## 0.6.2 — 2026-10-19
 
 **右拍改为"原地往下拍"**（按游戏本体计数条上的实测姿态校准）：

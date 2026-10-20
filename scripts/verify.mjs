@@ -212,6 +212,7 @@ if (mode === 'hard') {
   checkBuildFreshness()
   checkContractDrift()
   checkStyleKeys()
+  runSmoke('manifest-smoke.mjs')
   runSmoke('host-smoke.mjs')
   runSmoke('client-smoke.mjs')
 

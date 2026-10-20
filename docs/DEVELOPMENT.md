@@ -27,7 +27,7 @@
 
 | 组件 | 版本 |
 |---|---|
-| DeepSeek Harness | 0.1.0-rc.6+（web profile） |
+| DeepSeek Harness | **0.2.x**（web profile；`engines.dsh` 声明 `>=0.2.0-rc.1 <0.3.0`） |
 | Node.js | ≥ 22 |
 | pnpm | ≥ 9（≥10 时见下方注意） |
 | 操作系统 | Windows 10/11（Steam 扫描为 Windows 专属，其他平台自动降级） |
@@ -149,7 +149,7 @@ export const inject = ['settings', 'webServer'] // 依赖的服务提供方
       name: 'dsh-plugin-bongo-cat'
 ```
 
-### 4.2 设置存储（自带 JSON，兼容 DSH 0.1.x / 0.2.x）
+### 4.2 设置存储（自带 JSON）
 
 ```ts
 const scope = {
@@ -159,7 +159,7 @@ const scope = {
 ```
 
 - 路径：`$DSH_HOME/storages/bongo-cat/settings.json`（原子写：`.tmp` + rename，单条写队列防丢更新）；
-- **不用 `ctx.settings`**：DSH 0.2.0-rc.2 移除了 `ctx.settings.register`，旧版插件会在 `apply()` 抛异常导致后端不加载（设置页永远「正在读取设置…」）。自带存储在 0.1.x 与 0.2.x 上是同一条路径，`inject` 只声明 `webServer`；
+- **不用 `ctx.settings`**：DSH 0.2.0 不再提供 `ctx.settings.register`，旧版写法会在 `apply()` 抛异常导致后端不加载（设置页永远「正在读取设置…」）。自带存储与内核版本无关，`inject` 只声明 `webServer`；
 - 文件损坏 / 缺字段时按契约默认值合并（类型不符的键被丢弃），不会被一个坏值拖垮整个配置。
 
 完整字段表见 [§8.2](#82-settings-字段表)。
@@ -191,7 +191,9 @@ const scope = {
 
 ### 4.4 RPC 信封协议
 
-通道不经过 `ctx.connection.rpc.handle()`（该注册路径在 rc.6 下会因 shadowed ctx 抛错，与参考插件的发现一致），而是直接实现 connection 的 wire contract：
+通道不经过 `ctx.connection.rpc.handle()`，而是自己挂一条 `prefix` 路由实现 connection 的 wire contract。历史上是因为 0.1.x 的那个注册路径会因 shadowed ctx 抛错；0.2.0 这边多了一条理由：`ConnectionRpcHandler` 变成了四参 `(endpoint, payload, signal, peer)`，而本插件的路由天然拿不到 `PeerScope`（它不在 connection 的准入链上）。改用本地三参 `RpcDispatch` + 编译期断言 `Assignable<RpcDispatch, ConnectionRpcHandler>`，既不用伪造 peer，又能在内核再次改签名时先红在 `pnpm typecheck`。
+
+线上协议与 0.2.0 浏览器的 `connection.rpc.call(channel, endpoint, payload)` 完全一致（`dsh-client-connection/lib/client.js` 里就是 `POST ${channel}/${endpoint}` + 纯 JSON，无准入头）：
 
 请求：
 
@@ -282,9 +284,22 @@ export function apply(ctx: ClientContext) {
 }
 ```
 
-- `ctx.get('connection')` 是官方 client-plugin 模式（rc.6 的 client Context 类型面未发布，故 `as unknown as ConnectionHandle`）；
-- `settings.section` 槽位把设置面板插进 DSH 的 Settings 界面；
-- locale 字典通过 `LocaleNamespaceMap` 模块增强获得类型。
+- `ctx.get('connection')` 是官方 client-plugin 模式（服务从运行时注册表取，不从别的包 import）；
+- `ClientContext` 就是 `@deepseek-ai/cordis` 的 `Context`：0.2.0 把 0.1.x 的 `@deepseek-ai/dsh-client-runtime` 并进了 cordis，该包在 0.2.0 已不存在；
+- `ctx.slots` / `ctx.locale` 的类型来自**提供它们的包**：`import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'` 与 `…/dsh-client-locale/client`。这类 `import type {}` 只做类型增强，构建时被擦除，不会进浏览器模块表；
+- `settings.section` 槽位把设置面板插进 DSH 的 Settings 界面（`SettingsSectionOwnerProps` 只带一个 `close`，其余 props 来自 `inject`）；
+- locale 字典通过 `LocaleNamespaceMap` 模块增强获得类型，`ctx.locale.register(ns, { zh, en })` 的多语言一次注册形态在 0.2.0 仍然支持（`LocaleRuntime.register` 内部对 `string` 与对象两种入参分别处理）。
+
+### 5.2.1 0.2.0 客户端模块系统要点
+
+| 事项 | 0.2.0 的行为 | 对本插件的影响 |
+|---|---|---|
+| 浏览器半定位 | `client-modules` 读 `package.json` 的 `exports["./client"]`，缺失即抛 | 必须保留该导出（`.verify/manifest-smoke.mjs` 校验） |
+| 注册协议 | 仍是 `window.__ModuleLoader__.load({ id, factory })`，combo 脚本按包名拼接 | 构建包装层不用改 |
+| 模块表 | shell 播种 `react*`、`@deepseek-ai/cordis`、`dsh-client-store`、`ui-slots`、`ui-primitives`、`ui-dockkit` | 产物只能 `require` 这些（+ `dsh.client.inject` 里的包），否则运行时抛 |
+| `dsh.client.inject` | 包名成图边；指向不存在的包只是空边（官方 `ui-jobs` 也 inject 播种包 `ui-primitives`） | 删掉 0.1.x 的 `dsh-client-runtime` |
+| `dsh.client.external` | 声明「模块表里除播种表之外」的额外请求 | 本插件只用播种表，不声明 |
+
 
 ### 5.3 配置存储（`store.ts`）
 
@@ -381,11 +396,30 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ host 冒烟（34 项，含契约对账）；④ browser 冒烟（31 项）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（49 项，含契约对账与 RPC 信封）；⑥ browser 冒烟（39 项，jsdom 里跑真实产物）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 
-CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm build → pnpm verify → pnpm lint`。`pnpm lint` 覆盖 plain-JS 工具面（`scripts/`、`.verify/`），TS 由 `pnpm typecheck` 负责。
+CI（`.github/workflows/verify.yml`）：push/PR 跑 `pnpm install → pnpm build → pnpm verify → pnpm lint`。`pnpm lint` 覆盖 plain-JS 工具面（`scripts/`、`.verify/`、`tools/`），TS 由 `pnpm typecheck` 负责。
+
+### 6.5.1 安装后端到端验证（不属于 CI）
+
+守卫只能证明「产物自洽」，证明不了「真装进 dsh 0.2.0 能用」。后者用 `tools/verify-install.mjs` 对着运行中的实例验：
+
+```sh
+dsh web --no-open
+node tools/verify-install.mjs "http://127.0.0.1:9000/?token=…"
+```
+
+12 项断言覆盖：token 交换 → 引导图里有 `dsh-plugin-bongo-cat` 这一行 → 该行属于 initial-load batch → combo 脚本 HTTP 200 且含 `id: "dsh-plugin-bongo-cat"` → `/bongo-cat/info` 与 `config/get` 正常应答 → skin/sound 路由已挂载。0.2.0 里首次安装（全新 `$DSH_HOME`）的实测形态：
+
+```
+$ dsh plugin --profile web add dsh-plugin-bongo-cat-0.7.0.tgz
+dsh: initialized profile web at ~/.dsh/profiles/web
++ dsh-plugin-bongo-cat file:…/dsh-plugin-bongo-cat-0.7.0.tgz
+# profile package.json 的 dsh.profile.bundles 自动追加 "dsh-plugin-bongo-cat"
+# 无 peer 警告、无 allowBuilds 拦截（包只声明 prepack，安装时不跑）
+```
 
 ---
 

@@ -41,6 +41,7 @@
  * own storage; the game installation itself is never modified.
  */
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, extname, basename } from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
@@ -48,9 +49,11 @@ import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 
-// Type-only import keeps the ctx.webServer service augmentation active.
-// (ctx.settings is deliberately unused: DSH 0.2.x removed its register API.)
-import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
+// Type-only imports keep the ctx.webServer service augmentation active and
+// pin the wire shapes this plugin hand-implements. Both packages exist on the
+// 0.2.x line; ctx.settings is deliberately unused (0.2.0 removed its register
+// API, and 0.1.x never exposed third-party namespaces on the settings wire).
+import type { ConnectionRpcHandler, ConnectionRpcHandlerResult } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
 // The settings contract is the single source of truth for keys, defaults
@@ -127,6 +130,19 @@ function endpointOf(pathname: string): string | undefined {
   return endpoint
 }
 
+/**
+ * The dispatch signature this plugin owns.
+ *
+ * DSH 0.2.0 widened the registry handler with a trailing `peer: PeerScope`
+ * argument (`ConnectionRpcHandler`). This plugin serves its own prefix route
+ * instead of registering with `ctx.connection.rpc.handle()`, so no peer is
+ * ever handed to it — the transport-admission facts stay with the carrier.
+ * A three-parameter function remains assignable to the 0.2.0 handler type
+ * (TypeScript allows dropping trailing parameters), which is what
+ * {@link HANDLER_CONTRACT} asserts at compile time.
+ */
+type RpcDispatch = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ConnectionRpcHandlerResult>
+
 /** Collect a node request body as UTF-8 text, refusing oversized payloads. */
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolveBody, rejectBody) => {
@@ -157,12 +173,12 @@ function respond(res: ServerResponse, rpcId: string, result: HandlerResult): voi
  * Serve one generic Connection RPC exchange over the node req/res pair the
  * Host webserver hands to a prefix route.
  *
- * This mirrors dsh-client-connection's own `rpcFetchHandler`, so the browser
- * half's `connection.rpc.call(CHANNEL, endpoint, payload)` keeps working
- * unchanged: POST + application/json in, `{type:'server-response', rpcId,
- * result}` out, with rpcId echoed verbatim.
+ * This mirrors dsh-client-connection's own RPC carrier, so the browser half's
+ * `connection.rpc.call(CHANNEL, endpoint, payload)` keeps working unchanged on
+ * the 0.2.0 wire: POST `<channel>/<endpoint>` + application/json in,
+ * `{type:'server-response', rpcId, result}` out, with rpcId echoed verbatim.
  */
-async function serveRpc(req: IncomingMessage, res: ServerResponse, dispatch: ConnectionRpcHandler): Promise<void> {
+async function serveRpc(req: IncomingMessage, res: ServerResponse, dispatch: RpcDispatch): Promise<void> {
   let pathname: string
   try {
     pathname = new URL(req.url ?? '/', 'http://bongo-cat.local').pathname
@@ -216,7 +232,22 @@ async function serveRpc(req: IncomingMessage, res: ServerResponse, dispatch: Con
 }
 
 /** Result shape the connection RPC transport expects (its own RpcResult copy). */
-type HandlerResult = Awaited<ReturnType<ConnectionRpcHandler>>
+type HandlerResult = ConnectionRpcHandlerResult
+
+/** Compile-time "A is assignable to B" assertion (no runtime footprint). */
+type Assignable<A extends B, B> = A
+
+/**
+ * Contract guard for DSH 0.2.0.
+ *
+ * The kernel's `ConnectionRpcHandler` gained a trailing `peer` argument in
+ * 0.2.0; a three-parameter dispatch stays assignable to it. If a future kernel
+ * line changes the shape in a way this plugin no longer satisfies (a new
+ * required argument before `signal`, a different result type, a renamed
+ * endpoint payload), the alias below stops compiling and `pnpm typecheck`
+ * fails here instead of a user hitting it at runtime.
+ */
+type _RpcDispatchMatchesKernel = Assignable<RpcDispatch, ConnectionRpcHandler>
 
 function ok<T>(value: T): HandlerResult {
   return { ok: true, value }
@@ -287,7 +318,7 @@ function collectImages(root: string, depth = 0): ScannedFile[] {
   const files: ScannedFile[] = []
   const walk = (dir: string, level: number): void => {
     if (files.length >= MAX_SCAN_FILES_PER_ROOT || level > SCAN_DEPTH) return
-    let entries: ReturnType<typeof readdirSync>
+    let entries: Dirent[]
     try {
       entries = readdirSync(dir, { withFileTypes: true })
     } catch {
@@ -335,7 +366,7 @@ function scanBongoCat(): ScannedRoot[] {
     for (const library of steamLibraries(steam)) {
       const common = join(library, 'common')
       if (existsSync(common)) {
-        let entries: ReturnType<typeof readdirSync>
+        let entries: Dirent[]
         try {
           entries = readdirSync(common, { withFileTypes: true })
         } catch {
@@ -626,11 +657,12 @@ export function apply(ctx: Context) {
 
   // ── /bongo-cat channel ─────────────────────────────────────────────
   // Served as a plain Host-webserver prefix route instead of through
-  // `ctx.connection.rpc.handle()`, mirroring dsh-plugin-wallpaper: that
-  // registry resolves `webServer` through the provider's own context and
-  // throws under dsh rc.6. The wire contract the browser half consumes is
-  // unchanged; serveRpc implements it.
-  const dispatch: ConnectionRpcHandler = async (endpoint, payload, signal) => {
+  // `ctx.connection.rpc.handle()`, which on the 0.1.x line resolved
+  // `webServer` through the provider's own context and threw. The 0.2.0 web
+  // carrier POSTs `/<channel>/<endpoint>` with a plain JSON envelope and adds
+  // no admission headers, so this route speaks the same wire contract the
+  // browser half's `connection.rpc.call()` expects (see serveRpc).
+  const dispatch: RpcDispatch = async (endpoint, payload, signal) => {
     if (signal?.aborted) return failInternal('aborted')
 
     switch (endpoint) {

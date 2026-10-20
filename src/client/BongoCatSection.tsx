@@ -223,7 +223,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     return (
       <div className={styles.section}>
         <div className={styles.hint}>
-          {snapshot.status === 'error' ? t('unavailable') : t('loading')}
+          {snapshot.status === 'unavailable' ? t('unavailable') : t('loading')}
         </div>
       </div>
     )

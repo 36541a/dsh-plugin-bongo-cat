@@ -3,6 +3,11 @@
 # namespace, the /bongo-cat RPC channel, and the skin/sound GET routes;
 # its dsh.client declaration adds the browser half (lib/client.js) to
 # the web roster.
+#
+# Applied as a profile layer: the 0.2.0 launcher reads `dsh.bundle.patch`
+# from this package's manifest, and `dsh plugin --profile web add` appends
+# the package name to `dsh.profile.bundles`, so the row below lands in the
+# composed tree without the user editing cordis.patch.yml by hand.
 - insert:
     - id: bongo-cat
       name: 'dsh-plugin-bongo-cat'

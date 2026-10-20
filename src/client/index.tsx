@@ -6,15 +6,27 @@
  * through cordis services only: slots, locale and connection are
  * injected; no value imports from other plugin packages.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 
 // Type-only imports activate the Context service augmentations:
 //   ctx.slots (runtime) and the settings.section SlotMap contract
 //   (ui-settings). The connection wire handle is fetched through
-//   ctx.get('connection') — the official client-plugin pattern —
-//   because the typed Context declaration for the client half is not
-//   part of the published rc.6 type surface.
+//   ctx.get('connection') — the official client-plugin pattern — because a
+//   client plugin reaches sibling services through the runtime registry, not
+//   through a package import.
+//
+// DSH 0.2.0 note: the client context IS the cordis Context. The 0.1.x
+// helper package `@deepseek-ai/dsh-client-runtime` was folded into
+// `@deepseek-ai/cordis`, so importing the type from there is the 0.2.0
+// spelling of the same thing.
+//
+// Each service's `Context` augmentation lives in the package that provides
+// it, so the type-only imports below are what make `ctx.slots` (ui-renderer),
+// `ctx.locale` (locale) and the `settings.section` SlotMap contract
+// (ui-settings) visible to tsc. They are erased at build time.
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 
@@ -146,7 +158,6 @@ export function apply(ctx: ClientContext) {
   ctx.effect(() => ctx.locale.register(BONGO_CAT_NS, { zh, en }), 'bongo-cat: dictionaries')
   const translate = ctx.locale.bind(BONGO_CAT_NS)
   const t = (key: BongoCatKey): string => translate(key)
-
   void store.load()
   ctx.effect(() => attachBongoCat(ctx, store, connection.rpc, t), 'bongo-cat: overlay')
 

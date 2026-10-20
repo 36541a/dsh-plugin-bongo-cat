@@ -90,9 +90,9 @@ export const SETTINGS_FIELDS = {
 export type SettingsKey = keyof typeof SETTINGS_FIELDS
 
 /** Fields config/set may write (everything not marked writable:false). */
-export const WRITABLE_FIELDS: SettingsKey[] = Object.entries(SETTINGS_FIELDS)
+export const WRITABLE_FIELDS: SettingsKey[] = (Object.entries(SETTINGS_FIELDS) as Array<[SettingsKey, FieldMeta]>)
   .filter(([, meta]) => meta.writable !== false)
-  .map(([key]) => key as SettingsKey)
+  .map(([key]) => key)
 
 /** Resolved settings shape, derived from the contract (no hand-written interface). */
 type DefaultOf<M extends FieldMeta> =

@@ -19,17 +19,23 @@
 - **省电暂停**：页面隐藏时冻结全部动画并挂起音频，切回即恢复
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、双端 88 项断言，push/PR 自动跑
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、清单/模块表核对、双端 108 项断言，push/PR 自动跑
 
 ## 安装
 
-需要 DeepSeek Harness 的 **web profile**（Node.js ≥ 22）。
+需要 **DeepSeek Harness 0.2.0 及以上的 web profile**（`dsh --version` 应为 `0.2.x`；Node.js ≥ 22）。0.1.x 的内核已无本插件依赖的客户端模块系统，请先升级 dsh。
 
 从 GitHub 安装（仓库自带 `lib/` 构建产物，装完即用，无需构建）：
 
 ```sh
 dsh plugin --profile web add github:36541a/dsh-plugin-bongo-cat
 ```
+
+这条命令做三件事，**都不需要你手工配置**：
+
+1. 把包装进 profile 的 `dependencies`；
+2. 因为包里声明了 `dsh.bundle.patch`，`dsh` 会自动把 `dsh-plugin-bongo-cat` 追加进 `dsh.profile.bundles`（也就是“插件层”，无需自己改 `cordis.patch.yml`）；
+3. 因为 `package.json` 声明了 `dsh.client`，重启后浏览器端会自动进入 0.2.0 的模块引导图，不需要往任何清单里加路径。
 
 本地开发（link 模式，改完代码重新 build 再重启即可）：
 
@@ -42,6 +48,28 @@ dsh plugin --profile web add link:./dsh-plugin-bongo-cat
 
 安装后重启 `dsh web`（插件在启动时加载），刷新页面，打开 **Settings（设置）→ 邦哥猫**。
 
+### 装完怎么确认它真的活了
+
+`dsh web` 启动时会打印一个带 token 的地址，直接拿它跑仓库里的自检脚本：
+
+```sh
+dsh web --no-open                  # 复制打印出来的 http://127.0.0.1:<port>/?token=…
+node tools/verify-install.mjs "http://127.0.0.1:9000/?token=…"
+```
+
+全绿（12 项）说明这样几件事：
+
+```
+ok  token exchange accepted — HTTP 303
+ok  dsh-plugin-bongo-cat is rostered in the client graph   ← 浏览器端进了 0.2.0 引导图
+ok  row belongs to an initial-load batch — application
+ok  combo bundle served — HTTP 200, 10459199 bytes          ← 组合脚本带上了浏览器半
+ok  /bongo-cat/config/get returns resolved settings         ← host 端 RPC 通道可用
+ok  /plugins/bongo-cat/skin route is mounted — HTTP 404     ← 路由已挂载（未导入皮肤时 404 正常）
+```
+
+然后在浏览器里应当看到：右下角出现提示块「请先在设置里导入原版资源」（还没导入 Steam 资源时的正常形态），打开设置能在左侧导航里看到**邦哥猫**，里面有启用开关、皮肤选择、心情预置、大小/速度/边距、敲击总数与音效。随便敲几下键盘，徽章数字会增长。
+
 > **为什么不用跑安装脚本**：`lib/index.js` 与 `lib/client.js` 随仓库一起发布，`github:` 直装不执行任何 install 脚本，因此 pnpm 10+ 的 `allowBuilds` 闸不会拦你。开发时改完源码记得 `pnpm build` 再提交（`pnpm verify` 会检查产物是否比源码新）。
 
 卸载：
@@ -49,6 +77,8 @@ dsh plugin --profile web add link:./dsh-plugin-bongo-cat
 ```sh
 dsh plugin --profile web remove dsh-plugin-bongo-cat
 ```
+
+> 卸载时 `dsh` 会把它从 `dsh.profile.bundles` 里一并摘掉；`$DSH_HOME/storages/bongo-cat/` 里的设置与已提取素材会保留，想彻底清干净手动删掉这个目录即可。
 
 ## 使用
 
@@ -95,8 +125,9 @@ dsh-plugin-bongo-cat/
 │   ├── build.mjs                 # esbuild：双端构建 + CSS Modules + ModuleLoader 包裹
 │   └── verify.mjs                # 两级守卫运行器（硬/软档）
 ├── tools/
-│   └── extract-native.py         # 本机提取器：从 Steam 安装导出并合成原版帧
-├── .verify/                      # 冒烟测试（host/browser/契约探针）
+│   ├── extract-native.py         # 本机提取器：从 Steam 安装导出并合成原版帧
+│   └── verify-install.mjs        # 装完自检：对着 dsh web 的地址验证插件真的活了
+├── .verify/                      # 冒烟测试（manifest/host/browser/契约探针）
 ├── cordis.patch.yml              # host 端插件注册
 └── docs/
     ├── DEVELOPMENT.md            # 开发者文档
@@ -111,7 +142,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + host 47 项 + browser 36 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + manifest 20 项 + host 49 项 + browser 39 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```

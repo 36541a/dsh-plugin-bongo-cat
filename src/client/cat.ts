@@ -10,10 +10,10 @@
  * the overlay shows a small hint instead of a fake cat. A user-imported
  * sprite-strip image still works as an override.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import { BongoSound } from './sound'
-import { BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
+import { BongoCatKey, BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
 import { BongoCatStore } from './store'
 import styles from './cat.module.css'
 
@@ -67,10 +67,11 @@ class StatsFlusher {
 
 /**
  * Attach the cat overlay to the document.
+ * @param ctx client context (reserved for future service use)
  * @param t optional translator for the first-run hint toast
  * @returns disposer removing the overlay and all listeners.
  */
-export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: ClientConnectionRpc, t?: (key: string) => string): () => void {
+export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: ClientConnectionRpc, t?: (key: BongoCatKey) => string): () => void {
   if (document.getElementById(ROOT_ID) !== null) return () => undefined
 
   const sound = new BongoSound()
@@ -338,7 +339,11 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   const onPointerDown = (event: PointerEvent): void => {
     if (disposed || settings === null || !settings.enabled) return
     if (event.button !== 0) return
-    if (event.target !== null && root.contains(event.target)) return
+    // `event.target` is typed EventTarget; a pointer target is always a Node.
+    // Cast rather than `instanceof Node`: the constructor is realm-local, so
+    // an instanceof check silently inverts inside jsdom or an iframe.
+    const target = event.target as Node | null
+    if (target !== null && root.contains(target)) return
     slapNext()
   }
 

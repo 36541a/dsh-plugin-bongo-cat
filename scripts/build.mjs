@@ -14,11 +14,11 @@
  *        return module.exports;
  *      }});
  *
- *    Externals are the shell's shared platform modules (PLATFORM_MODULES
- *    seed table, see @deepseek-ai/dsh-client-web/src/platform.ts) plus the
- *    packages declared in dsh.client.inject. CSS modules are compiled and
- *    injected with the same <style data-plugin-css> convention the official
- *    client packages use, so the loader's claimStyles() tracks them.
+ *    Externals are the shell's shared platform modules (the seed table the
+ *    0.2.0 web shell passes as `staticModules`, plus the packages declared in
+ *    `dsh.client.inject`). CSS modules are compiled and injected with the same
+ *    `<style data-plugin-css>` convention the official client packages use, so
+ *    the loader's claimStyles() tracks them.
  */
 import { build } from 'esbuild'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -28,23 +28,27 @@ import { fileURLToPath } from 'node:url'
 const PLUGIN_ID = 'dsh-plugin-bongo-cat'
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
-/** Shared browser platform modules (seed table). */
+/** Shared browser platform modules seeded by the DSH 0.2.0 web shell. */
 const PLATFORM_MODULES = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form'
+  '@deepseek-ai/dsh-client-ui-dockkit'
 ]
 
-/** Packages declared in dsh.client.inject (graph edges at boot). */
+/**
+ * Packages declared in `dsh.client.inject` — the graph edges the 0.2.0
+ * client-modules rosters on this row's behalf. Keep this list identical to
+ * package.json's `dsh.client.inject`: the build and the manifest describing
+ * two different graphs is exactly the drift that lands as a blank settings
+ * page.
+ */
 const CLIENT_INJECT = [
-  '@deepseek-ai/dsh-client-runtime',
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-slots'
