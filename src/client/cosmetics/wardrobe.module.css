@@ -86,16 +86,13 @@
   box-shadow: 0 0 0 2px rgba(255, 92, 138, 0.22);
 }
 
-.art {
+/* extracted overlay icon (a PNG from the game's own sprite atlas) */
+.icon {
   display: block;
   width: 100%;
   height: 100%;
-}
-
-.art svg {
-  display: block;
-  width: 100%;
-  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
 }
 
 .stars {
@@ -189,8 +186,24 @@
   color: #ff5c8a;
 }
 
-/* an exchange is available: make the button read as actionable, not just
-   "not disabled" */
+/* tap balance towards the next automatic drop (1000 taps = one item) */
+.progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.14));
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ff8fa3, #ffd166);
+  transition: width 220ms ease;
+}
+
+/* no exchange button any more: drops are automatic, so the ready flag has
+   no consumer. Kept for profiles whose panel is still mounted on an older
+   build? (harmless dead rule — the tool row no longer sets it) */
 .tool[data-ready='true'] {
   border-color: #ff5c8a;
   background: rgba(255, 143, 163, 0.18);

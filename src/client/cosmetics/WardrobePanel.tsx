@@ -1,27 +1,35 @@
 /**
- * The wardrobe panel: category tabs, the sticker grid, the colour wheel and
- * the tool row (filter / dice / exchange / take everything off).
+ * The wardrobe panel: category tabs, the item grid, the colour wheel and the
+ * tool row (filter / dice / take everything off).
+ *
+ * Items come from the host's extracted Steam catalogue (fetched once, then on
+ * every native-asset change); the drop is automatic on the host side, so this
+ * panel is read-only about the economy: a progress bar shows how far the tap
+ * balance is from the next automatic grant.
  *
  * Every edit is one `wardrobe` patch, i.e. one atomic write of the whole
  * document — the same rule the widget board follows. That makes "equip while
- * an exchange lands" a last-writer-wins merge of a complete state rather than
+ * a drop lands" a last-writer-wins merge of a complete state rather than
  * two half-patches racing each other.
  */
 import { useEffect, useState } from 'react'
-import type { BongoCatSettings, BongoCatKey } from '../settings'
+import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+import type { BongoCatSettings, BongoCatKey, RpcResult } from '../settings'
 import type { BongoCatStore } from '../store'
 import {
-  type CosmeticItem, type WardrobeState, type WardrobeTab,
-  COSMETIC_ITEMS, FUR_COLORS, MAX_EXCHANGE_PER_CALL,
-  collectedCount, equipItem, exchangeItems, itemsForTab, pendingExchanges, randomizeOutfit,
-  tapsUntilNextExchange, unequipAll, withFilter
+  type CosmeticCatalog, type CosmeticItem, type WardrobeState, type WardrobeTab,
+  FUR_COLORS, TAPS_PER_ITEM,
+  collectedCount, equipItem, itemsForTab, randomizeOutfit,
+  tapsUntilNextItem, unequipAll, withFilter
 } from '../../shared/cosmetics'
+import { cosmeticIconUrl } from './render'
 import { updateWardrobe } from './writer'
 import styles from './wardrobe.module.css'
 
 export interface WardrobePanelProps {
   store: BongoCatStore
   settings: BongoCatSettings
+  rpc: ClientConnectionRpc
   t: (key: BongoCatKey) => string
   writable: boolean
 }
@@ -29,6 +37,7 @@ export interface WardrobePanelProps {
 const TAB_KEYS: Record<WardrobeTab, BongoCatKey> = {
   hat: 'wardrobeHat',
   face: 'wardrobeFace',
+  back: 'wardrobeBack',
   accessory: 'wardrobeAccessory',
   fur: 'wardrobeFur'
 }
@@ -39,32 +48,45 @@ const FILTER_KEYS = {
   equipped: 'wardrobeFilterEquipped'
 } as const
 
-const TABS: WardrobeTab[] = ['hat', 'face', 'accessory', 'fur']
+const TABS: WardrobeTab[] = ['hat', 'face', 'back', 'accessory', 'fur']
 
 /** Five-pointed star row; the rarity is data, the glyph is not. */
 function stars(rarity: number): string {
   return '★'.repeat(rarity)
 }
 
-function ItemArt({ item }: { item: CosmeticItem }) {
-  return (
-    <span className={styles.art}>
-      <svg viewBox='0 0 100 100' aria-hidden='true' dangerouslySetInnerHTML={{ __html: item.art }} />
-    </span>
-  )
-}
-
-export function WardrobePanel({ store, settings, t, writable }: WardrobePanelProps) {
+export function WardrobePanel({ store, settings, rpc, t, writable }: WardrobePanelProps) {
   const [tab, setTab] = useState<WardrobeTab>('hat')
   const [note, setNote] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState<CosmeticCatalog | null>(null)
+  const [loading, setLoading] = useState(true)
   const wardrobe: WardrobeState = settings.wardrobe
 
   // The tap total only moves through stats/bump, so the snapshot lags behind
   // whatever accrued while the panel was closed. Opening it re-reads that one
-  // field, which is what enables the exchange button.
+  // field, which is what keeps the progress bar honest.
   useEffect(() => {
     void store.refreshCounter()
   }, [store])
+
+  // The catalogue lives on the host (extracted from the game install). It is
+  // loaded once and re-read whenever the original assets change underneath us.
+  useEffect(() => {
+    let alive = true
+    const load = async (): Promise<void> => {
+      const result = await rpc.call('/bongo-cat', 'cosmetics/catalog', {}) as RpcResult<CosmeticCatalog>
+      if (!alive) return
+      setCatalog(result.ok ? result.value : null)
+      setLoading(false)
+    }
+    void load()
+    const onNativeChanged = (): void => { void load() }
+    window.addEventListener('bongo-cat:native-changed', onNativeChanged)
+    return () => {
+      alive = false
+      window.removeEventListener('bongo-cat:native-changed', onNativeChanged)
+    }
+  }, [rpc])
 
   /**
    * Every edit is a *function* of the current wardrobe, applied through the
@@ -88,45 +110,13 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
     return true
   }
 
-  /**
-   * Exchange: pull the host's persisted tap total first. The panel is usually
-   * opened long after the page loaded, so the store's `counter` is stale by
-   * however many taps happened since — a fresh `config/get` is what makes the
-   * button agree with the ledger the cat has been adding to.
-   */
-  const exchange = async (): Promise<void> => {
-    try {
-      await store.refreshCounter()
-      const fresh = store.getSnapshot()
-      if (fresh.status !== 'ready' || fresh.value === undefined) {
-        setNote(t('unavailable'))
-        return
-      }
-      // The result is captured inside the mutator so it describes the state
-      // the write actually applied to, not a snapshot taken before the queue.
-      const fallbackCounter = fresh.value.counter
-      let gained = 0
-      let firstTime = 0
-      await updateWardrobe(store, (current) => {
-        const counter = store.getSnapshot().value?.counter ?? fallbackCounter
-        const result = exchangeItems(current, counter, MAX_EXCHANGE_PER_CALL)
-        gained = result.gained.length
-        firstTime = result.gained.filter((gain) => gain.isNew).length
-        return result.state
-      })
-      setNote(gained === 0
-        ? t('wardrobeNoDrop')
-        : `${t('wardrobeExchanged')} ${gained} · ${t('wardrobeNewOnes')} ${firstTime}`)
-    } catch (error) {
-      setNote(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  const items = itemsForTab(tab)
+  const items = catalog === null ? [] : itemsForTab(catalog.items, tab)
   const shown = items.filter(visible)
   const equippedCount = Object.values(wardrobe.equipped).filter((id) => id !== null).length
-  const ready = pendingExchanges(wardrobe, settings.counter)
-  const nextExchange = tapsUntilNextExchange(wardrobe, settings.counter)
+  const nextItem = tapsUntilNextItem(settings.counter)
+  const progress = Math.round((TAPS_PER_ITEM - nextItem) / TAPS_PER_ITEM * 100)
+  const total = catalog === null ? 0 : catalog.items.length
+  const stamp = catalog?.stamp ?? ''
 
   return (
     <div className={styles.board} data-role='wardrobe-board'>
@@ -166,6 +156,8 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
             </button>
           ))}
         </div>
+      ) : catalog === null ? (
+        <div className={styles.empty}>{loading ? t('loading') : t('wardrobeNoAssets')}</div>
       ) : (
         <div className={styles.grid} role='list'>
           {shown.length === 0 && <div className={styles.empty}>{t('wardrobeEmpty')}</div>}
@@ -184,10 +176,16 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
                 data-equipped={worn}
                 aria-pressed={worn}
                 disabled={!writable}
-                title={`${t(TAB_KEYS[item.slot])} · ${stars(item.rarity)}${owned > 0 ? ` ×${owned}` : ` · ${t('wardrobeLocked')}`}`}
-                onClick={() => void commit((current) => equipItem(current, item.id))}
+                title={`${item.name} · ${t(TAB_KEYS[item.slot])} · ${stars(item.rarity)}${owned > 0 ? ` ×${owned}` : ` · ${t('wardrobeLocked')}`}`}
+                onClick={() => void commit((current) => equipItem(catalog.items, current, item.id))}
               >
-                <ItemArt item={item} />
+                <img
+                  className={styles.icon}
+                  src={cosmeticIconUrl(item.id, stamp)}
+                  alt={item.name}
+                  loading='lazy'
+                  draggable={false}
+                />
                 <span className={styles.stars}>{stars(item.rarity)}</span>
                 {owned > 1 && <span className={styles.count}>×{owned}</span>}
                 {worn && <span className={styles.check}>✓</span>}
@@ -196,6 +194,10 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
           })}
         </div>
       )}
+
+      <div className={styles.progress} data-role='wardrobe-progress' aria-hidden='true'>
+        <div className={styles.progressFill} style={{ width: `${progress}%` }} />
+      </div>
 
       <div className={styles.tools}>
         <button
@@ -222,30 +224,17 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
           data-role='wardrobe-random'
           title={t('wardrobeRandom')}
           aria-label={t('wardrobeRandom')}
-          disabled={!writable}
-          onClick={() => void commit((current) => randomizeOutfit(current))}
+          disabled={!writable || catalog === null}
+          onClick={() => {
+            const list = catalog?.items ?? []
+            void commit((current) => randomizeOutfit(list, current))
+          }}
         >
           <svg viewBox='0 0 24 24' aria-hidden='true'>
             <rect x='3' y='3' width='18' height='18' rx='4' fill='none' stroke='currentColor' strokeWidth='2' />
             <circle cx='8.5' cy='8.5' r='1.6' fill='currentColor' />
             <circle cx='15.5' cy='15.5' r='1.6' fill='currentColor' />
             <circle cx='12' cy='12' r='1.6' fill='currentColor' />
-          </svg>
-        </button>
-
-        <button
-          type='button'
-          className={styles.tool}
-          data-role='wardrobe-exchange'
-          title={t('wardrobeExchange')}
-          aria-label={t('wardrobeExchange')}
-          data-ready={ready > 0}
-          disabled={!writable || ready === 0}
-          onClick={() => void exchange()}
-        >
-          <svg viewBox='0 0 24 24' aria-hidden='true'>
-            <path d='M20 12a8 8 0 1 1-2.3-5.6' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' />
-            <path d='M20 4v5h-5' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' />
           </svg>
         </button>
 
@@ -265,8 +254,7 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
       </div>
 
       <div className={styles.note} data-role='wardrobe-status'>
-        {note ?? `${t('wardrobeCollected')} ${collectedCount(wardrobe)}/${COSMETIC_ITEMS.length}`
-          + (ready > 0 ? ` · ${t('wardrobeReady')} ${ready}` : ` · ${t('wardrobeNextDrop')} ${nextExchange}`)}
+        {note ?? `${t('wardrobeCollected')} ${collectedCount(wardrobe)}/${total} · ${t('wardrobeNextDrop')} ${nextItem}`}
       </div>
       <div className={styles.hint}>{t('wardrobeHint')}</div>
     </div>

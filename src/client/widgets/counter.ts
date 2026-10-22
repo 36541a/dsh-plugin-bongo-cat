@@ -32,7 +32,8 @@ export const counterWidget: WidgetDefinition = {
 
     const format = (count: number): string => count.toLocaleString()
     const paint = (): void => {
-      const total = ctx.store.getSnapshot().value?.counter ?? 0
+      const snapshot = ctx.store.getSnapshot().value
+      const total = snapshot?.lifetimeTaps ?? snapshot?.counter ?? 0
       const count = config.source === 'session' ? session : total
       value.textContent = format(count)
       label.textContent = config.source === 'session' ? ctx.t('widgetCounterSession') : ctx.t('widgetCounterTotal')

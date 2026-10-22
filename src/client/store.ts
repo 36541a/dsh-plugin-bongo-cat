@@ -58,7 +58,23 @@ export class BongoCatStore {
     const result = await this.rpc.call('/bongo-cat', 'config/get', {}) as RpcResult<BongoCatSettings>
     if (!result.ok) return
     if (this.snapshot.status !== 'ready' || this.snapshot.value === undefined) return
-    this.publish({ status: 'ready', value: { ...this.snapshot.value, counter: result.value.counter } })
+    this.publish({
+      status: 'ready',
+      value: { ...this.snapshot.value, counter: result.value.counter, wardrobe: result.value.wardrobe }
+    })
+  }
+
+  /**
+   * Merge a host-authoritative tap result into the mirror.
+   *
+   * `stats/bump` is the authority for automatic drops: it returns the debited
+   * tap balance plus the item(s) it just granted, and both must show up on the
+   * cat/panel without waiting for a whole-document reload.
+   */
+  applyHostState(patch: Partial<BongoCatSettings>): void {
+    const snapshot = this.snapshot
+    if (snapshot.status !== 'ready' || snapshot.value === undefined) return
+    this.publish({ status: 'ready', value: { ...snapshot.value, ...patch } })
   }
 
   /**

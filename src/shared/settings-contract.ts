@@ -84,8 +84,10 @@ export const SETTINGS_FIELDS = {
   customSoundRevision: { kind: 'natural', default: 0, max: 1_000_000_000 },
   /** Show the tap counter badge. */
   showCounter: { kind: 'boolean', default: true },
-  /** Total taps, persisted here and bumped through stats/bump. */
+  /** Tap balance: spent 1000 at a time on automatic wardrobe drops. */
   counter: { kind: 'natural', default: 0, writable: false },
+  /** Lifetime taps (never debited); the counter above is the spendable balance. */
+  lifetimeTaps: { kind: 'natural', default: 0, writable: false },
   /** One-shot first-run hint already shown. */
   hintSeen: { kind: 'boolean', default: false },
   /**

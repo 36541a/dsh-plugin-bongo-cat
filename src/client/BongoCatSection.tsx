@@ -371,7 +371,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
       <div className={styles.group}>
         <div className={styles['group-title']}>{t('counterLabel')}</div>
         <div className={styles.row}>
-          <span className={styles.value}>{settings.counter.toLocaleString()}</span>
+          <span className={styles.value}>{(settings.lifetimeTaps ?? settings.counter).toLocaleString()}</span>
           <label className={styles.check}>
             <input type='checkbox' checked={settings.showCounter}
               onChange={(event) => void store.set({ showCounter: event.target.checked })} />
@@ -387,7 +387,7 @@ export function BongoCatSection(props: BongoCatSectionProps) {
       {/* ── wardrobe ───────────────────────────────────────────── */}
       <div className={styles.group}>
         <div className={styles['group-title']}>{t('wardrobeSection')}</div>
-        <WardrobePanel store={store} settings={settings} t={t} writable={writable} />
+        <WardrobePanel store={store} settings={settings} rpc={rpc} t={t} writable={writable} />
       </div>
 
       {/* ── desktop widgets ────────────────────────────────────── */}

@@ -65,7 +65,11 @@ import {
   type BongoCatSettings
 } from './shared/settings-contract'
 import { pruneWidgets } from './shared/widgets'
-import { migrateWardrobeCursor, sanitizeWardrobe } from './shared/cosmetics'
+import {
+  type CosmeticCatalog, type CosmeticItem,
+  TAPS_PER_ITEM, autoGrantItems, emptyEquipped,
+  legacyItemFor, pickStarterItems, reconcileWardrobe, sanitizeWardrobe
+} from './shared/cosmetics'
 
 export const name = 'bongo-cat'
 
@@ -495,10 +499,47 @@ export function apply(ctx: Context) {
   const skinsDir = join(dir, 'skins')
   const soundsDir = join(dir, 'sounds')
   const nativeDir = join(dir, 'native')
+  const cosmeticsDir = join(nativeDir, 'cosmetics')
+  const cosmeticsCatalogPath = join(cosmeticsDir, 'catalog.json')
   const skinMetaPath = join(skinsDir, 'skin.json')
   const soundMetaPath = join(soundsDir, 'sound.json')
   mkdirSync(skinsDir, { recursive: true })
   mkdirSync(soundsDir, { recursive: true })
+
+  /** The extracted Steam item catalogue (see tools/extract-native.py). */
+  let cosmeticsCache: CosmeticCatalog | null = null
+  const readCosmeticsCatalog = (): CosmeticCatalog => {
+    if (cosmeticsCache !== null) return cosmeticsCache
+    const raw = readJson<{ items?: unknown; stamp?: unknown; size?: unknown }>(cosmeticsCatalogPath)
+    const items: CosmeticItem[] = []
+    if (raw !== null && Array.isArray(raw.items)) {
+      for (const entry of raw.items) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const row = entry as Record<string, unknown>
+        const { id, name, slot, layer, rarity } = row
+        if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) continue
+        if (typeof name !== 'string' || name.length === 0) continue
+        if (slot !== 'hat' && slot !== 'face' && slot !== 'back' && slot !== 'accessory') continue
+        const rect = Array.isArray(row.rect) && row.rect.length === 4 && row.rect.every((value) => typeof value === 'number' && Number.isFinite(value))
+          ? [row.rect[0], row.rect[1], row.rect[2], row.rect[3]] as [number, number, number, number]
+          : undefined
+        items.push({
+          id,
+          name,
+          slot,
+          layer: layer === 'back' ? 'back' : 'front',
+          rarity: rarity === 3 ? 3 : rarity === 2 ? 2 : 1,
+          ...(rect === undefined ? {} : { rect })
+        })
+      }
+    }
+    const stamp = raw !== null && typeof raw.stamp === 'string' ? raw.stamp : ''
+    const size = raw !== null && Array.isArray(raw.size) && raw.size.length === 2 && raw.size.every((value) => typeof value === 'number' && Number.isFinite(value))
+      ? [raw.size[0], raw.size[1]] as [number, number]
+      : [777, 504] as [number, number]
+    cosmeticsCache = { stamp, size, items }
+    return cosmeticsCache
+  }
 
   /** Extracted original-artwork frames (see tools/extract-native.py). */
   const NATIVE_FRAMES = ['idle', 'tap-left', 'tap-right'] as const
@@ -699,14 +740,37 @@ export function apply(ctx: Context) {
     // A widget type can be retired between versions; drop those instances so
     // the dock never renders a card whose definition is gone.
     next.widgets = pruneWidgets(next.widgets)
-    // 0.9.3 moved the wardrobe from "one drop per 120 taps" to "one exchange
-    // per 1000" without re-basing `claimed`, which left every profile that had
-    // already collected drops with a cursor larger than `floor(taps / 1000)` —
-    // a debt no amount of tapping could clear. This is the only place that can
-    // tell an old file from a current client, so the re-base happens here; then
-    // the document is normalised so a hand-edited file cannot inject junk.
-    const wardrobe = sanitizeWardrobe(migrateWardrobeCursor(stored.wardrobe))
-    if (wardrobe.ok) next.wardrobe = wardrobe.value
+    // The wardrobe moves onto the extracted Steam catalogue the first time one
+    // exists: legacy sticker ids map onto the closest real item (progress is
+    // kept, never dropped), an unknown file starts from the starter picks, and
+    // the result is reconciled so nothing references a missing id. Then the
+    // document is normalised so a hand-edited file cannot inject junk.
+    const wardrobe = sanitizeWardrobe(stored.wardrobe)
+    if (wardrobe.ok) {
+      const cosmetics = readCosmeticsCatalog()
+      let value = wardrobe.value
+      if (cosmetics.items.length > 0) {
+        const known = new Set(cosmetics.items.map((item) => item.id))
+        const legacy = Object.keys(value.owned).some((id) => !known.has(id))
+        const owned: Record<string, number> = {}
+        for (const [oldId, count] of Object.entries(value.owned)) {
+          const mapped = legacyItemFor(cosmetics.items, oldId)?.id ?? oldId
+          if (!cosmetics.items.some((item) => item.id === mapped)) continue
+          owned[mapped] = Math.min(999, (owned[mapped] ?? 0) + count)
+        }
+        const equipped = legacy ? emptyEquipped() : value.equipped
+        if (Object.keys(owned).length === 0) {
+          for (const id of pickStarterItems(cosmetics.items)) owned[id] = 1
+        }
+        value = reconcileWardrobe({ ...value, owned, equipped }, cosmetics.items)
+      }
+      next.wardrobe = value
+    }
+    // First run after the upgrade: the lifetime total starts from the balance
+    // the profile already carries, so the counter never jumps backwards.
+    if (typeof stored.lifetimeTaps !== 'number' && typeof next.counter === 'number') {
+      next.lifetimeTaps = next.counter
+    }
     // `skin` used to be a built-in art id ("classic", ...). It now holds a
     // Steam sprite prefix, so a stale value would make every re-extract fail
     // with "sprites missing for skin 'classic'". Anything the catalog does not
@@ -742,6 +806,24 @@ export function apply(ctx: Context) {
       await persistSettings({ ...scope.get(), ...patch })
     }
   }
+
+  /**
+   * Settle taps that accrued while no browser page was open: the balance is
+   * host-authoritative, so the automatic drop must fire here too, not only in
+   * stats/bump. One pass at activation is enough — stats/bump keeps it going.
+   */
+  const settlePendingDrops = async (): Promise<void> => {
+    try {
+      const current = scope.get()
+      if ((current.counter ?? 0) < TAPS_PER_ITEM) return
+      const settled = autoGrantItems(current.wardrobe, current.counter, readCosmeticsCatalog().items)
+      if (settled.granted.length === 0) return
+      await scope.update({ counter: settled.counter, wardrobe: settled.state })
+    } catch {
+      // a broken wardrobe file must never keep the host from booting
+    }
+  }
+  void settlePendingDrops()
 
   /** Persist an imported asset atomically and return its new revision. */
   const importAsset = (kind: 'skin' | 'sound', sourcePath: string | null, base64: string | null, name: string): AssetMeta | string => {
@@ -848,9 +930,11 @@ export function apply(ctx: Context) {
           return failBadRequest('count must be an integer in [1, 10000]')
         }
         try {
-          const next = (scope.get().counter ?? 0) + count
-          await scope.update({ counter: next })
-          return ok({ counter: next })
+          const current = scope.get()
+          const lifetime = (current.lifetimeTaps ?? 0) + count
+          const settled = autoGrantItems(current.wardrobe, (current.counter ?? 0) + count, readCosmeticsCatalog().items)
+          await scope.update({ counter: settled.counter, lifetimeTaps: lifetime, wardrobe: settled.state })
+          return ok({ counter: settled.counter, lifetimeTaps: lifetime, granted: settled.granted, wardrobe: settled.state })
         } catch (error) {
           return failInternal(String(error))
         }
@@ -858,8 +942,8 @@ export function apply(ctx: Context) {
 
       case 'stats/reset': {
         try {
-          await scope.update({ counter: 0 })
-          return ok({ counter: 0 })
+          await scope.update({ counter: 0, lifetimeTaps: 0 })
+          return ok({ counter: 0, lifetimeTaps: 0 })
         } catch (error) {
           return failInternal(String(error))
         }
@@ -973,16 +1057,23 @@ export function apply(ctx: Context) {
           return ok(meta)
         } finally {
           nativeImporting = false
+          cosmeticsCache = null
         }
       }
 
       case 'native/remove': {
         try {
           rmSync(nativeDir, { recursive: true, force: true })
+          cosmeticsCache = null
           return ok({ removed: true })
         } catch (error) {
           return failInternal(String(error))
         }
+      }
+
+      case 'cosmetics/catalog': {
+        const catalog = readCosmeticsCatalog()
+        return ok({ stamp: catalog.stamp, size: catalog.size, items: catalog.items })
       }
 
       case 'info': {
@@ -1104,6 +1195,44 @@ export function apply(ctx: Context) {
       pipeFile(res, file)
     }
   }), 'bongo-cat: native frame route')
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/plugins/bongo-cat/cosmetic',
+    handler: (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'text/plain' })
+        res.end('method not allowed')
+        return
+      }
+      let pathname: string
+      try {
+        pathname = new URL(req.url ?? '/', 'http://bongo-cat.local').pathname
+      } catch {
+        pathname = ''
+      }
+      const prefix = '/plugins/bongo-cat/cosmetic/'
+      const match = /^\/plugins\/bongo-cat\/cosmetic\/([a-z0-9][a-z0-9-]{0,63})(?:\.icon)?\.png$/.exec(pathname)
+      if (match === null || !pathname.startsWith(prefix)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const file = join(cosmeticsDir, pathname.slice(prefix.length))
+      const size = assetSize(res, file)
+      if (size === undefined) return
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Content-Length': String(size),
+        'Cache-Control': 'private, max-age=31536000, immutable'
+      })
+      if (req.method === 'HEAD') {
+        res.end()
+        return
+      }
+      pipeFile(res, file)
+    }
+  }), 'bongo-cat: cosmetic asset route')
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',

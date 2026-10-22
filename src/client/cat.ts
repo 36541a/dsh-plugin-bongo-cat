@@ -12,7 +12,8 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
-import { DECOR_BACK_ROLE, DECOR_ROLE, artworkFilter, cosmeticMarkup } from './cosmetics/render'
+import { DECOR_BACK_ROLE, DECOR_ROLE, artworkFilter, cosmeticIconUrl, cosmeticMarkup } from './cosmetics/render'
+import { CosmeticCatalog, itemById } from '../shared/cosmetics'
 import { openBongoCatSettings } from './settings-link'
 import { BongoSound } from './sound'
 import { BongoCatKey, BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
@@ -21,19 +22,31 @@ import styles from './cat.module.css'
 
 const ROOT_ID = 'dsh-bongo-cat-root'
 const BASE_WIDTH = 150
-const TAP_MS = 130
+const TAP_MS = 100
 const NATIVE_FRAMES = ['idle', 'tap-left', 'tap-right'] as const
 const STATS_FLUSH_TAPS = 20
 const STATS_FLUSH_MS = 4000
 
 const CORNER_CYCLE: BongoCatSettings['position'][] = ['bottom-right', 'bottom-left', 'top-left', 'top-right']
 
+/** What stats/bump answers with: the debited balance, the lifetime total and
+ *  whatever the automatic drop just granted. */
+export interface BumpResult {
+  counter: number
+  lifetimeTaps?: number
+  wardrobe?: BongoCatSettings['wardrobe']
+  granted?: { id: string; isNew: boolean }[]
+}
+
 /** Stat flush helper: batches counter bumps over the RPC channel. */
 class StatsFlusher {
   private pending = 0
   private timer: number | null = null
 
-  constructor(private readonly rpc: ClientConnectionRpc) {}
+  constructor(
+    private readonly rpc: ClientConnectionRpc,
+    private readonly onResult: (result: BumpResult) => void
+  ) {}
 
   add(count: number): void {
     this.pending += count
@@ -56,8 +69,11 @@ class StatsFlusher {
     }
     if (this.pending === 0) return
     const count = this.pending
-    const result = await this.rpc.call('/bongo-cat', 'stats/bump', { count }) as RpcResult<{ counter: number }>
-    if (result.ok) this.pending = 0
+    const result = await this.rpc.call('/bongo-cat', 'stats/bump', { count }) as RpcResult<BumpResult>
+    if (result.ok) {
+      this.pending = 0
+      this.onResult(result.value)
+    }
     // on failure the pending count stays and rides the next flush
   }
 
@@ -77,7 +93,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   if (document.getElementById(ROOT_ID) !== null) return () => undefined
 
   const sound = new BongoSound()
-  const stats = new StatsFlusher(rpc)
+  const stats = new StatsFlusher(rpc, (result) => {
+    store.applyHostState({
+      counter: result.counter,
+      ...(result.lifetimeTaps === undefined ? {} : { lifetimeTaps: result.lifetimeTaps }),
+      ...(result.wardrobe === undefined ? {} : { wardrobe: result.wardrobe })
+    })
+    if (result.granted !== undefined && result.granted.length > 0) showDropToast(result.granted)
+  })
 
   // ── DOM ───────────────────────────────────────────────────────
   const root = document.createElement('div')
@@ -161,6 +184,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let tapTimer: number | null = null
   let spriteIdleTimer: number | null = null
   let hintToastTimer: number | null = null
+  let dropToastTimer: number | null = null
   let sessionTaps = 0
   let nativeStatus: NativeStatus = { available: false }
   let nativeStamp = ''
@@ -237,13 +261,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
    * every owned-count change would restart the sticker entrance animation.
    */
   let cosmeticKey = ''
+  let catalog: CosmeticCatalog = { stamp: '', size: [1, 1], items: [] }
   const applyCosmetics = (next: BongoCatSettings): void => {
     const wardrobe = next.wardrobe
-    const key = `${wardrobe.fur}|${wardrobe.equipped.hat ?? ''}|${wardrobe.equipped.face ?? ''}|${wardrobe.equipped.accessory ?? ''}`
+    const key = `${catalog.stamp}|${wardrobe.fur}|${wardrobe.equipped.hat ?? ''}|${wardrobe.equipped.face ?? ''}|${wardrobe.equipped.back ?? ''}|${wardrobe.equipped.accessory ?? ''}`
     if (key !== cosmeticKey) {
       cosmeticKey = key
-      decor.innerHTML = cosmeticMarkup(wardrobe, 'front')
-      decorBack.innerHTML = cosmeticMarkup(wardrobe, 'back')
+      decor.innerHTML = cosmeticMarkup(wardrobe, catalog, 'front')
+      decorBack.innerHTML = cosmeticMarkup(wardrobe, catalog, 'back')
     }
     const filter = artworkFilter(wardrobe)
     if (nativeWrap.style.filter !== filter) {
@@ -293,6 +318,13 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     applyPosition(settings)
   }
 
+  const refreshCosmetics = async (): Promise<void> => {
+    const result = await rpc.call('/bongo-cat', 'cosmetics/catalog', {}) as RpcResult<CosmeticCatalog>
+    if (disposed) return
+    catalog = result.ok ? result.value : { stamp: '', size: [1, 1], items: [] }
+    if (settings !== null) applyCosmetics(settings)
+  }
+
   const paint = (next: BongoCatSettings): void => {
     const prev = settings
     settings = next
@@ -324,6 +356,44 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
       window.setTimeout(() => toast.remove(), 6000)
       void store.set({ hintSeen: true })
     }, 800)
+  }
+
+  /** Toast when the automatic drop grants an item: its icon plus the slot. */
+  const showDropToast = (grants: { id: string; isNew: boolean }[]): void => {
+    if (disposed) return
+    const first = grants[0]
+    const item = first === undefined ? undefined : itemById(catalog.items, first.id)
+    const toast = document.createElement('div')
+    toast.className = styles['bc-toast']
+    toast.dataset.role = 'bongo-cat-drop'
+    const art = document.createElement('span')
+    art.className = styles['bc-toast-art']
+    if (item !== undefined) {
+      const img = document.createElement('img')
+      img.src = cosmeticIconUrl(item.id, catalog.stamp)
+      img.alt = ''
+      img.draggable = false
+      art.append(img)
+    }
+    const text = document.createElement('span')
+    const label = t ? t('wardrobeDrop') : 'New cosmetic'
+    const slot = item === undefined
+      ? ''
+      : item.slot === 'hat'
+        ? t ? t('wardrobeHat') : 'Hats'
+        : item.slot === 'face'
+          ? t ? t('wardrobeFace') : 'Face'
+          : item.slot === 'back'
+            ? t ? t('wardrobeBack') : 'Wings'
+            : t ? t('wardrobeAccessory') : 'Extras'
+    text.textContent = grants.length > 1 ? `${label} ×${grants.length}` : `${label} · ${slot}`
+    toast.append(art, text)
+    root.append(toast)
+    if (dropToastTimer !== null) window.clearTimeout(dropToastTimer)
+    dropToastTimer = window.setTimeout(() => {
+      toast.remove()
+      dropToastTimer = null
+    }, 4200)
   }
 
   // ── interaction ───────────────────────────────────────────────
@@ -557,9 +627,13 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   window.addEventListener('pagehide', () => { void stats.flush() })
 
   // the settings panel fires this after importing / removing the original art
-  const onNativeChanged = (): void => { void refreshNative() }
+  const onNativeChanged = (): void => {
+    void refreshNative()
+    void refreshCosmetics()
+  }
   window.addEventListener('bongo-cat:native-changed', onNativeChanged)
   void refreshNative()
+  void refreshCosmetics()
 
   // initial paint from whatever the store already holds
   const initial = store.getSnapshot()
@@ -569,6 +643,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     disposed = true
     window.clearTimeout(tapTimer ?? 0)
     window.clearTimeout(hintToastTimer ?? 0)
+    window.clearTimeout(dropToastTimer ?? 0)
     if (openTimer !== null) window.clearTimeout(openTimer)
     if (pokeTimer !== null) window.clearTimeout(pokeTimer)
     if (spriteIdleTimer !== null) window.clearTimeout(spriteIdleTimer)
