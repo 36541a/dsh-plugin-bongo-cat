@@ -49,8 +49,7 @@ const serverState = {
   // Two widgets are pre-seeded so the dock has something to reconcile on boot;
   // the add/remove flow itself is covered by the browser suite (vm/ui.mjs).
   widgets: [
-    { id: 'clock', type: 'clock', enabled: true, x: 120, y: 120, size: 'sm', opacity: 1, config: { hour12: false, seconds: true, showDate: true } },
-    { id: 'steam', type: 'steam', enabled: true, x: 120, y: 280, size: 'md', opacity: 1, config: { limit: 3, showPlaytime: true } }
+    { id: 'clock', type: 'clock', enabled: true, x: 120, y: 120, size: 'sm', opacity: 1, config: { hour12: false, seconds: true, showDate: true } }
   ],
   // A hat, an accessory and a non-default fur: enough to prove the overlay
   // projects a wardrobe, without depending on the drop ledger.
@@ -89,22 +88,6 @@ const connection = {
       }
       if (method === 'native/remove') {
         return { ok: true, value: { removed: true } }
-      }
-      if (method === 'steam/library') {
-        return {
-          ok: true,
-          value: {
-            source: 'steam',
-            games: [
-              { appid: 1337970, name: 'Bongo Cat', playtimeMinutes: 90, lastPlayed: 2 },
-              { appid: 620, name: 'Portal 2', playtimeMinutes: 600, lastPlayed: 1 }
-            ]
-          }
-        }
-      }
-      if (method === 'steam/launch') {
-        serverState.launched = payload.appid
-        return { ok: true, value: { launched: true } }
       }
       return { ok: false, error: { code: 'bad-request', message: `unexpected ${method}` } }
     }
@@ -315,6 +298,56 @@ const decorBack = el?.querySelector('[data-role="bongo-cat-decor-back"]')
 check('back-layer items render behind the cat', decorBack?.querySelector('[data-item="wings"]') !== null && decor?.querySelector('[data-item="wings"]') === null)
 check('going back to the original fur clears the filter', (nativeLayer?.style.filter ?? '') === '', nativeLayer?.style.filter ?? 'none')
 
+console.log('— click opens settings —')
+
+// Stand-in for the DSH shell: the trigger carries the ARIA contract the
+// helper looks for, and the dialog holds one nav entry with our own label.
+let shellOpens = 0
+let navClicks = 0
+const fakeTrigger = document.createElement('button')
+fakeTrigger.setAttribute('aria-haspopup', 'dialog')
+fakeTrigger.setAttribute('aria-expanded', 'false')
+fakeTrigger.addEventListener('click', () => {
+  shellOpens += 1
+  fakeTrigger.setAttribute('aria-expanded', 'true')
+})
+document.body.append(fakeTrigger)
+
+const fakeDialog = document.createElement('div')
+fakeDialog.setAttribute('role', 'dialog')
+const fakeNav = document.createElement('button')
+fakeNav.textContent = '邦哥猫'
+fakeNav.addEventListener('click', () => { navClicks += 1 })
+fakeDialog.append(fakeNav)
+document.body.append(fakeDialog)
+
+const stage = el?.querySelector('[data-role="bongo-cat-native"]')?.parentElement
+check('the cat exposes a hover hint for the click', root()?.querySelector('[data-role="bongo-cat-hint-chip"]')?.textContent === '设置')
+
+stage?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 }))
+await sleep(420)
+check('clicking the cat opens the settings panel', shellOpens === 1, String(shellOpens))
+check('the panel lands on the bongo-cat section', navClicks === 1, String(navClicks))
+
+// A drag ends with a click on the stage; it must not open anything.
+const positionBeforeDrag = serverState.position
+stage?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 100 }))
+stage?.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 240, clientY: 190 }))
+stage?.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 240, clientY: 190 }))
+stage?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 }))
+await sleep(420)
+check('dragging the cat does not open settings', shellOpens === 1 && navClicks === 1, `${shellOpens}/${navClicks}`)
+check('dropping the cat still snaps it to a corner', serverState.position !== positionBeforeDrag, String(serverState.position))
+
+// Double-click keeps its own gesture (and cancels the pending jump).
+stage?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 }))
+stage?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 2 }))
+await sleep(420)
+check('double-click cycles the corner without opening settings', shellOpens === 1, String(shellOpens))
+
+fakeTrigger.remove()
+fakeDialog.remove()
+
 console.log('— enable toggle —')
 await payload.store.set({ enabled: false })
 await sleep(10)
@@ -330,17 +363,11 @@ const widgetLayer = document.getElementById('dsh-bongo-cat-widgets')
 const catRoot = document.getElementById('dsh-bongo-cat-root')
 check('widget layer mounts', widgetLayer !== null)
 check('widget layer is independent of the cat root', widgetLayer !== null && catRoot !== null && !catRoot.contains(widgetLayer))
-check('pre-seeded widgets are mounted', document.querySelectorAll('.bc-widget').length === 2, String(document.querySelectorAll('.bc-widget').length))
+check('pre-seeded widgets are mounted', document.querySelectorAll('.bc-widget').length === 1, String(document.querySelectorAll('.bc-widget').length))
 
 const clockCard = document.querySelector('.bc-widget[data-widget-type="clock"]')
 check('clock card renders a time', /\d{1,2}:\d{2}/.test(clockCard?.textContent ?? ''), clockCard?.textContent ?? 'none')
 check('clock card carries its instance id', clockCard?.getAttribute('data-widget-id') === 'clock')
-
-const steamRows = [...document.querySelectorAll('.bc-widget[data-widget-type="steam"] .bc-widget-steam-row')]
-check('steam widget lists installed games', steamRows.length === 2, `rows=${steamRows.length}`)
-steamRows[0]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-await sleep(80)
-check('clicking a game asks the host to launch it', serverState.launched === 1337970, String(serverState.launched))
 
 // Drag: pointerdown on the card, move, release. jsdom has no layout, so assert
 // the style moved and that the new seat was persisted through config/set.

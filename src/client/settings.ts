@@ -15,7 +15,7 @@ export const BONGO_CAT_NS = 'bongo-cat'
 
 /** Dictionary keys of the bongo-cat namespace (single source of truth). */
 export type BongoCatKey =
-  | 'nav' | 'hint' | 'hintToast'
+  | 'nav' | 'hint' | 'hintToast' | 'openSettings' | 'openSettingsHint'
   | 'enabledLabel'
   | 'steamSkinsLabel' | 'skinImporting'
   | 'nativeLabel' | 'nativeHint' | 'nativeMissing' | 'nativeMissingShort' | 'nativeReady' | 'nativeImport'
@@ -36,8 +36,6 @@ export type BongoCatKey =
   | 'widgetCounter' | 'widgetCounterDesc' | 'widgetCounterTotal' | 'widgetCounterSession' | 'widgetSource'
   | 'widgetFocus' | 'widgetFocusDesc' | 'widgetFocusStart' | 'widgetFocusPause' | 'widgetFocusReset'
   | 'widgetMinutes' | 'widgetChime'
-  | 'widgetSteam' | 'widgetSteamDesc' | 'widgetSteamRefresh' | 'widgetSteamLoading' | 'widgetSteamEmpty'
-  | 'widgetSteamFailed' | 'widgetSteamLocalOnly' | 'widgetSteamLaunchFailed' | 'widgetLimit' | 'widgetShowPlaytime'
   // wardrobe
   | 'wardrobeSection' | 'wardrobeHint' | 'wardrobeHat' | 'wardrobeFace' | 'wardrobeAccessory' | 'wardrobeFur'
   | 'wardrobeFilter' | 'wardrobeFilterAll' | 'wardrobeFilterOwned' | 'wardrobeFilterEquipped'

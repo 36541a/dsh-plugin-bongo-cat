@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 — 2026-10-22
+
+**移除 Steam 游戏组件，新增“点猫进设置”**。
+
+- **删除** `steam` 组件：`src/client/widgets/steam.ts` 整个文件、`WIDGET_TYPES` 与配置类型/默认值/清洗分支、注册表条目、设置面板里的「显示条数 / 显示时长」控件、`widgets.css` 的 `.bc-widget-steam-*` 样式、host 的 `steam/library` 与 `steam/launch` 端点（以及它的 loopback 白名单项）、10 个字典键，以及两套测试里的相关断言
+- **旧配置迁移**：新增 `pruneWidgets()`，host 在 `loadSettings` 时过滤掉本版本不认识或不合法的实例——装过 0.9.0 的 profile 里残留的 Steam 卡片不会变成渲染不出内容的空壳
+- **点击猫打开设置**：单击猫本体打开「设置 → 邦哥猫」。DSH 没有公开的 `openSettings` 客户端服务（`settings.launcher` 是单占位且已被账号菜单占用），所以通过 shell 自己的触发器 ARIA 契约 `button[aria-haspopup="dialog"][aria-expanded]` 点击打开，再点我们自己的分节导航；分节点击成功即停，首启引导挡住时仍会落在设置页
+- **交互不冲突**：拖动结束会补发一次 `click`，用 `suppressClick` 吞掉（400ms 自动过期）；双击保留“换角落”，单击延迟 240ms 执行，第二击会取消待执行的跳转
+- **反馈**：悬停出现「设置」气泡（`pointer-events: none`，不抢拖拽），点击时猫做一次 260ms 的压扁动画；`prefers-reduced-motion` 下关闭动画
+
+回归：`pnpm typecheck` / `lint` / `verify:soft` 绿，硬档 20 + 74 + 63 = 157 项全绿（host 少了 4 项 Steam 断言，browser 多了 6 项点击/拖拽/双击断言）。
+
 ## 0.9.0 — 2026-10-22
 
 **新增装扮系统（Wardrobe）**：帽子 / 表情 / 配饰 / 毛色四类可收集道具，点格子即穿即脱，猫咪身上实时生效。

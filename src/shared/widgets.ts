@@ -17,7 +17,7 @@
  */
 
 /** Widget kinds shipped by this plugin. */
-export const WIDGET_TYPES = ['clock', 'counter', 'focus', 'steam'] as const
+export const WIDGET_TYPES = ['clock', 'counter', 'focus'] as const
 export type WidgetType = (typeof WIDGET_TYPES)[number]
 
 /** Two sizes keep the board readable without a resize handle. */
@@ -48,18 +48,10 @@ export interface FocusWidgetConfig {
   chime: boolean
 }
 
-/** `steam` — installed Steam games as launch buttons. */
-export interface SteamWidgetConfig {
-  /** How many games to list (most recently played first). */
-  limit: number
-  showPlaytime: boolean
-}
-
 export type WidgetConfigOf = {
   clock: ClockWidgetConfig
   counter: CounterWidgetConfig
   focus: FocusWidgetConfig
-  steam: SteamWidgetConfig
 }
 
 interface WidgetInstanceBase<T extends WidgetType> {
@@ -80,22 +72,19 @@ export type WidgetInstance =
   | WidgetInstanceBase<'clock'>
   | WidgetInstanceBase<'counter'>
   | WidgetInstanceBase<'focus'>
-  | WidgetInstanceBase<'steam'>
 
 /** Per-type defaults, used when an instance is created and when a key is missing. */
 export const WIDGET_CONFIG_DEFAULTS: { [K in WidgetType]: WidgetConfigOf[K] } = {
   clock: { hour12: false, seconds: true, showDate: true },
   counter: { source: 'total' },
-  focus: { minutes: 25, chime: true },
-  steam: { limit: 4, showPlaytime: true }
+  focus: { minutes: 25, chime: true }
 }
 
 /** Human label keys live in the dictionary, not here (see `WIDGET_LABEL_KEYS`). */
 export const WIDGET_LABEL_KEYS: { [K in WidgetType]: string } = {
   clock: 'widgetClock',
   counter: 'widgetCounter',
-  focus: 'widgetFocus',
-  steam: 'widgetSteam'
+  focus: 'widgetFocus'
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
@@ -140,13 +129,6 @@ export function sanitizeWidgetConfig(type: WidgetType, raw: unknown): WidgetConf
       return {
         minutes: Math.round(clampNumber(input.minutes, defaults.minutes, 1, 120)),
         chime: boolOr(input.chime, defaults.chime)
-      }
-    }
-    case 'steam': {
-      const defaults = WIDGET_CONFIG_DEFAULTS.steam
-      return {
-        limit: Math.round(clampNumber(input.limit, defaults.limit, 1, 8)),
-        showPlaytime: boolOr(input.showPlaytime, defaults.showPlaytime)
       }
     }
   }
@@ -208,6 +190,25 @@ export function sanitizeWidgets(value: unknown): WidgetsResult {
     } as WidgetInstance)
   }
   return { ok: true, value: clean }
+}
+
+/**
+ * Drop instances this build cannot render.
+ *
+ * A widget type can disappear between versions (the Steam launcher did in
+ * 0.9.1), and a profile written before that still carries live instances. The
+ * host runs stored settings through this on load so an orphan card never
+ * reaches the dock, which would otherwise render a card with no definition.
+ * Anything malformed is dropped too: the stored document is not trusted.
+ */
+export function pruneWidgets(value: unknown): WidgetInstance[] {
+  if (!Array.isArray(value)) return []
+  const known = value.filter((entry) => {
+    const type = (entry as { type?: unknown } | null)?.type
+    return typeof type === 'string' && (WIDGET_TYPES as readonly string[]).includes(type)
+  })
+  const result = sanitizeWidgets(known)
+  return result.ok ? result.value : []
 }
 
 /** Next free instance id for `type` (`clock`, `clock-2`, `clock-3`, …). */

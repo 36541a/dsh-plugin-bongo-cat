@@ -14,6 +14,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import { type DropGain, claimDrops, itemById, pendingDrops } from '../shared/cosmetics'
 import { DECOR_BACK_ROLE, DECOR_ROLE, artworkFilter, cosmeticMarkup } from './cosmetics/render'
+import { openBongoCatSettings } from './settings-link'
 import { updateWardrobe } from './cosmetics/writer'
 import { BongoSound } from './sound'
 import { BongoCatKey, BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
@@ -88,6 +89,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
 
   const stage = document.createElement('div')
   stage.className = styles['bc-stage']
+  stage.title = t ? t('openSettingsHint') : 'Click for settings'
 
   // user-imported sprite strip (optional override)
   const sprite = document.createElement('div')
@@ -142,7 +144,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   count.textContent = '0'
   badge.append(drum, count)
 
-  stage.append(decorBack, sprite, nativeWrap, decor, empty, badge)
+  // Hover affordance for the click-to-settings gesture (pointer-events: none,
+  // so it never steals the drag).
+  const hint = document.createElement('div')
+  hint.className = styles['bc-hint']
+  hint.dataset.role = 'bongo-cat-hint-chip'
+  hint.textContent = t ? t('openSettings') : 'Settings'
+
+  stage.append(decorBack, sprite, nativeWrap, decor, empty, badge, hint)
   root.append(stage)
   document.body.append(root)
 
@@ -444,8 +453,17 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
 
   const onStagePointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return
+    // A pending single-click jump dies the moment a second press starts: that
+    // press is either the start of a double-click or of a drag, and neither
+    // should open Settings.
+    if (openTimer !== null) {
+      window.clearTimeout(openTimer)
+      openTimer = null
+      clickCandidate = true
+    }
     dragStart = { x: event.clientX, y: event.clientY, left: root.offsetLeft, top: root.offsetTop }
-    stage.setPointerCapture(event.pointerId)
+    // Optional chain: older engines and jsdom do not implement capture.
+    stage.setPointerCapture?.(event.pointerId)
   }
 
   const onStagePointerMove = (event: PointerEvent): void => {
@@ -470,6 +488,9 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
       return
     }
     dragging = false
+    // The pointerup that ends a drag is followed by a click; swallow it.
+    suppressClick = true
+    window.setTimeout(() => { suppressClick = false }, 400)
     root.classList.remove(cls('bc-is-dragging'))
     const start = dragStart
     dragStart = null
@@ -494,9 +515,52 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     })
   }
 
+  /**
+   * A drag still ends with a `click` on the stage, so the gesture that moves
+   * the cat must not also open Settings. The flag is set on drop and expires
+   * on its own in case the click never arrives (dropped outside the stage).
+   */
+  let suppressClick = false
+  let openTimer: number | null = null
+  let pokeTimer: number | null = null
+  /** A second press landed while a single-click jump was still pending. */
+  let clickCandidate = false
+
+  /** Short squash so the click feels acknowledged before the panel opens. */
+  const poke = (): void => {
+    root.classList.add(cls('bc-poked'))
+    if (pokeTimer !== null) window.clearTimeout(pokeTimer)
+    pokeTimer = window.setTimeout(() => {
+      root.classList.remove(cls('bc-poked'))
+      pokeTimer = null
+    }, 260)
+  }
+
   const onStageClick = (event: MouseEvent): void => {
-    if (dragging) return
-    if (event.detail > 1) cycleCorner()
+    if (suppressClick) {
+      suppressClick = false
+      clickCandidate = false
+      return
+    }
+    // Double-click owns the corner cycle, so a single click waits one tap
+    // interval before it acts. `detail` alone is not enough: a slow second
+    // click still arrives as detail 1, and the pointerdown above has already
+    // cancelled the pending jump — `clickCandidate` carries that over.
+    if (event.detail > 1 || clickCandidate) {
+      clickCandidate = false
+      if (openTimer !== null) {
+        window.clearTimeout(openTimer)
+        openTimer = null
+      }
+      cycleCorner()
+      return
+    }
+    if (openTimer !== null) window.clearTimeout(openTimer)
+    openTimer = window.setTimeout(() => {
+      openTimer = null
+      poke()
+      openBongoCatSettings(t ? t('nav') : 'Bongo Cat')
+    }, 240)
   }
 
   // ── visibility pause ──────────────────────────────────────────
@@ -552,6 +616,8 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     disposed = true
     window.clearTimeout(tapTimer ?? 0)
     window.clearTimeout(hintToastTimer ?? 0)
+    if (openTimer !== null) window.clearTimeout(openTimer)
+    if (pokeTimer !== null) window.clearTimeout(pokeTimer)
     if (spriteIdleTimer !== null) window.clearTimeout(spriteIdleTimer)
     window.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('pointerdown', onPointerDown, true)

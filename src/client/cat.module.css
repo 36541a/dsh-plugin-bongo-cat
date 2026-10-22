@@ -12,6 +12,44 @@
   filter: drop-shadow(0 6px 14px rgba(30, 34, 48, 0.18));
 }
 
+/* click feedback: a short squash, then the settings panel opens */
+.bc-root.bc-poked .bc-stage {
+  animation: bc-poke 260ms ease-out;
+}
+
+@keyframes bc-poke {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.05, 0.94); }
+  70% { transform: scale(0.98, 1.02); }
+  100% { transform: scale(1); }
+}
+
+.bc-hint {
+  position: absolute;
+  left: 50%;
+  top: -26px;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(24, 26, 38, 0.82);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.bc-stage:hover .bc-hint {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-root.bc-poked .bc-stage { animation: none; }
+}
+
 .bc-root.bc-is-dragging {
   cursor: grabbing;
   filter: drop-shadow(0 12px 22px rgba(30, 34, 48, 0.28));

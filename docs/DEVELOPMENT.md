@@ -361,7 +361,7 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 
 ### 5.12.1 桌面组件（v0.8.0）
 
-**为什么要独立一层**：猫是"一个固定的悬浮体"，组件是"N 个可摆放的小卡片"，两者的生命周期、布局规则和失败方式都不一样。把它们塞进 `cat.ts` 会让猫的控制器同时承担布局引擎和四种业务，所以拆成同级的第二层：
+**为什么要独立一层**：猫是"一个固定的悬浮体"，组件是"N 个可摆放的小卡片"，两者的生命周期、布局规则和失败方式都不一样。把它们塞进 `cat.ts` 会让猫的控制器同时承担布局引擎和三种业务，所以拆成同级的第二层：
 
 ```
 apply()
@@ -409,6 +409,20 @@ apply()
 
 **扩展一件道具**：在 `COSMETIC_ITEMS` 加一条（id、slot、rarity、x/y/w、SVG inner markup），需要“在猫身后”就加 `layer: 'back'`。面板、掉落、校验、i18n 都不用动；`pnpm typecheck` 会盯住类型，`host-smoke` 会盯住“没拥有的不能穿”。
 
+### 5.12.3 点猫打开设置（v0.9.1）
+
+**没有可用的服务，就走 shell 自己的 ARIA 契约。** DSH 的 `settings.section` / `settings.trigger` 都只是内容槽位，唯一拿到 `openSettings` 的是 `settings.launcher`——单占位，已被账号菜单占用。所以 `settings-link.ts` 查找 `button[aria-haspopup="dialog"][aria-expanded]`（面板触发器），点击它，再在 `[role="dialog"]` 里点我们自己的分节按钮。分节点击**成功即停**，重试 80/220/480/800ms；首启引导挡住导航时只落到设置页，不强行关别人的引导层。
+
+**三个手势的优先级**：拖动 > 双击 > 单击。
+
+- 拖动结束浏览器仍会补发 `click`，`pointerup` 里置 `suppressClick`（400ms 自过期，防止在舞台外松手导致永久吞点击）；
+- 双击（`detail > 1`）沿用“换角落”，并取消待执行的跳转；
+- 单击延迟 240ms 才执行，给第二击留出取消窗口。
+
+`stage.setPointerCapture?.()` 用可选链：jsdom 与老引擎没有指针捕获，冒烟测试要能在没有它的环境里跑。
+
+**反馈**：`.bc-hint` 气泡悬停显示（`pointer-events: none`），点击时 `.bc-poked` 做 260ms 压扁动画，`prefers-reduced-motion` 下关闭。
+
 ### 5.13 原版美术模式（v0.3.0）
 
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
@@ -446,7 +460,7 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（78 项，含契约对账、RPC 信封、loopback 写保护、组件 schema 与衣柜清洗）；⑥ browser 冒烟（59 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化、贴纸前后层/CSS 校验）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（74 项，含契约对账、RPC 信封、loopback 写保护、组件 schema 与衣柜清洗）；⑥ browser 冒烟（63 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化、贴纸前后层、点猫开设置与拖拽/双击的互斥）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 

@@ -13,7 +13,6 @@ import type { BongoCatStore } from '../store'
 import { clockWidget } from './clock'
 import { counterWidget } from './counter'
 import { focusWidget } from './focus'
-import { steamWidget } from './steam'
 
 /** Everything a widget may reach. Deliberately narrow: no dock, no cat. */
 export interface WidgetContext {
@@ -45,8 +44,7 @@ export interface WidgetDefinition {
 export const WIDGET_DEFINITIONS: readonly WidgetDefinition[] = [
   clockWidget,
   counterWidget,
-  focusWidget,
-  steamWidget
+  focusWidget
 ]
 
 const BY_TYPE = new Map<WidgetType, WidgetDefinition>(WIDGET_DEFINITIONS.map((widget) => [widget.type, widget]))

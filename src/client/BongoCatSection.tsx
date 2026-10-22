@@ -498,28 +498,6 @@ export function BongoCatSection(props: BongoCatSectionProps) {
                 </div>
               )}
 
-              {widget.type === 'steam' && (
-                <div className={styles.row}>
-                  <label className={styles.label}>{t('widgetLimit')}</label>
-                  <input className={styles.select} type='number' min='1' max='8' step='1'
-                    value={widget.config.limit}
-                    onChange={(event) => {
-                      const limit = Math.min(8, Math.max(1, Math.round(Number(event.target.value) || 1)))
-                      void changeWidget(widget.id, (current) => ({
-                        ...current,
-                        config: { ...current.config, limit }
-                      } as WidgetInstance))
-                    }} />
-                  <label className={styles.check}>
-                    <input type='checkbox' checked={widget.config.showPlaytime}
-                      onChange={(event) => void changeWidget(widget.id, (current) => ({
-                        ...current,
-                        config: { ...current.config, showPlaytime: event.target.checked }
-                      } as WidgetInstance))} />
-                    <span>{t('widgetShowPlaytime')}</span>
-                  </label>
-                </div>
-              )}
             </div>
           )
         })}

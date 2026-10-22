@@ -64,6 +64,7 @@ import {
   sanitizeSettingsPatch,
   type BongoCatSettings
 } from './shared/settings-contract'
+import { pruneWidgets } from './shared/widgets'
 
 export const name = 'bongo-cat'
 
@@ -111,9 +112,7 @@ const LOOPBACK_ONLY_ENDPOINTS = new Set([
   'sounds/import',
   'sounds/remove',
   'native/import',
-  'native/remove',
-  // Launching a game starts a process on this machine; remote pages must not.
-  'steam/launch'
+  'native/remove'
 ])
 
 /** True only for an address the OS reports for the local machine. */
@@ -397,79 +396,6 @@ function steamLibraries(steam: string): string[] {
     // no vdf (or unreadable) — the default library is all we have
   }
   return [...new Set(libraries.filter((lib) => existsSync(lib)))]
-}
-
-/** One installed Steam game, as the `steam` widget needs it. */
-interface SteamGame {
-  appid: number
-  name: string
-  /** Valve reports minutes; the browser formats them. */
-  playtimeMinutes: number
-  /** Unix seconds of the last launch; 0 when the game was never played. */
-  lastPlayed: number
-}
-
-/** Steam's own runtime; never a game, always first in every manifest list. */
-const STEAM_RUNTIME_APPID = 228980
-
-/**
- * Enumerate installed games from every Steam library.
- *
- * `appmanifest_<appid>.acf` is the authoritative "installed" marker — Steam
- * deletes it on uninstall — so this needs no extra state and never touches the
- * game directory. Only four keys are read; a malformed manifest skips that one
- * entry instead of failing the whole list.
- *
- * @returns Installed games sorted by most recently played, plus whether any
- * Steam library was readable at all (the widget distinguishes "no games" from
- * "no Steam").
- */
-function steamLibrary(): { games: SteamGame[]; source: 'steam' | 'none' } {
-  const games: SteamGame[] = []
-  const seen = new Set<number>()
-  let foundLibrary = false
-
-  const readString = (text: string, key: string): string => {
-    const match = new RegExp(`"${key}"\\s+"([^"]*)"`).exec(text)
-    return match === null ? '' : match[1]
-  }
-
-  for (const steam of steamRootCandidates()) {
-    for (const library of steamLibraries(steam)) {
-      foundLibrary = true
-      let entries: Dirent[]
-      try {
-        entries = readdirSync(library, { withFileTypes: true })
-      } catch {
-        continue
-      }
-      for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.startsWith('appmanifest_') || !entry.name.endsWith('.acf')) continue
-        let text: string
-        try {
-          text = readFileSync(join(library, entry.name), 'utf8')
-        } catch {
-          continue
-        }
-        const appid = Number(readString(text, 'appid'))
-        const name = readString(text, 'name')
-        if (!Number.isInteger(appid) || appid <= 0 || appid === STEAM_RUNTIME_APPID) continue
-        if (name.length === 0 || seen.has(appid)) continue
-        seen.add(appid)
-        const playtime = Number(readString(text, 'playtime_forever'))
-        const lastPlayed = Number(readString(text, 'LastPlayed'))
-        games.push({
-          appid,
-          name,
-          playtimeMinutes: Number.isFinite(playtime) && playtime > 0 ? Math.round(playtime) : 0,
-          lastPlayed: Number.isFinite(lastPlayed) && lastPlayed > 0 ? Math.round(lastPlayed) : 0
-        })
-      }
-    }
-  }
-
-  games.sort((a, b) => b.lastPlayed - a.lastPlayed || a.name.localeCompare(b.name))
-  return { games, source: foundLibrary ? 'steam' : 'none' }
 }
 
 /** Collect image files under a root, breadth-limited, largest-first-safe. */
@@ -769,6 +695,9 @@ export function apply(ctx: Context) {
       if (typeof value === 'number' && !Number.isFinite(value)) continue
       next[key] = value
     }
+    // A widget type can be retired between versions; drop those instances so
+    // the dock never renders a card whose definition is gone.
+    next.widgets = pruneWidgets(next.widgets)
     // `skin` used to be a built-in art id ("classic", ...). It now holds a
     // Steam sprite prefix, so a stale value would make every re-extract fail
     // with "sprites missing for skin 'classic'". Anything the catalog does not
@@ -1045,36 +974,6 @@ export function apply(ctx: Context) {
         } catch (error) {
           return failInternal(String(error))
         }
-      }
-
-      case 'steam/library': {
-        try {
-          return ok(steamLibrary())
-        } catch (error) {
-          return failInternal(String(error))
-        }
-      }
-
-      case 'steam/launch': {
-        const appid = typeof payload === 'object' && payload !== null ? (payload as { appid?: unknown }).appid : undefined
-        if (typeof appid !== 'number' || !Number.isInteger(appid) || appid <= 0 || appid > 4_000_000_000) {
-          return failBadRequest('appid must be a positive integer')
-        }
-        const url = `steam://rungameid/${appid}`
-        try {
-          // The appid is a validated integer, so it can never reach the command
-          // as text; `start` is only used to reach the protocol handler.
-          if (process.platform === 'win32') {
-            spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
-          } else if (process.platform === 'darwin') {
-            spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
-          } else {
-            spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
-          }
-        } catch (error) {
-          return failInternal(`could not launch Steam: ${String(error)}`)
-        }
-        return ok({ launched: true })
       }
 
       case 'info': {
