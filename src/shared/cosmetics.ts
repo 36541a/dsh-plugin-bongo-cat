@@ -254,14 +254,27 @@ export interface WardrobeEquipped {
   accessory: string | null
 }
 
+/**
+ * Which rule the `claimed` cursor is denominated in.
+ *
+ * 0.9.3 shipped the jump from "one drop per 120 taps" to "one exchange per
+ * 1000 taps" without re-basing the cursor, so a profile that had already
+ * collected N drops carried a debt of N exchanges (its `claimed` exceeded
+ * `floor(taps / 1000)` forever). The tag makes the two ledgers distinguishable
+ * so `migrateWardrobeCursor` can convert exactly once.
+ */
+export type WardrobeLedger = 'taps120' | 'taps1000'
+
 export interface WardrobeState {
   equipped: WardrobeEquipped
   /** Fur colour id; `original` is the untouched artwork. */
   fur: string
   /** Item id → owned count (≥ 1). Duplicates show as a badge. */
   owned: Record<string, number>
-  /** How many drops have been rolled; the tap ledger's cursor. */
+  /** How many exchanges have been spent; the tap ledger's cursor. */
   claimed: number
+  /** Unit of `claimed`. Missing on documents written before 0.9.4. */
+  ledger: WardrobeLedger
   filter: WardrobeFilter
 }
 
@@ -276,11 +289,15 @@ export const WARDROBE_DEFAULTS: WardrobeState = {
   fur: 'original',
   owned: { beanie: 1, blush: 1, scarf: 1 },
   claimed: 0,
+  ledger: 'taps1000',
   filter: 'all'
 }
 
 /** One exchange per N taps — the game's own "play to unlock" pacing. */
 export const TAPS_PER_EXCHANGE = 1000
+
+/** What `claimed` counted in the 0.9.0-0.9.3 ledger. Migration only. */
+const LEGACY_TAPS_PER_DROP = 120
 
 /** A single exchange call never grants more than this (a long-idle profile). */
 export const MAX_EXCHANGE_PER_CALL = 10
@@ -360,7 +377,39 @@ export function sanitizeWardrobe(value: unknown): WardrobeResult {
     ? input.filter as WardrobeFilter
     : WARDROBE_DEFAULTS.filter
 
-  return { ok: true, value: { equipped, fur, owned, claimed, filter } }
+  // Opaque tag: the sanitizer never re-bases the cursor. A 0.9.3 client writing
+  // a wardrobe without the field must not be mistaken for a legacy document
+  // (that would convert its cursor a second time).
+  const ledger = input.ledger === 'taps120' ? 'taps120' : WARDROBE_DEFAULTS.ledger
+
+  return { ok: true, value: { equipped, fur, owned, claimed, ledger, filter } }
+}
+
+/**
+ * Re-base a stored cursor onto the 1000-tap ledger, once.
+ *
+ * Called by the host when it reads `settings.json`, which is the only place
+ * that can tell "this file predates the tag" from "a current client sent a
+ * wardrobe without one". The conversion keeps the *work* the user already did
+ * rather than the *items* they happened to roll: N drops at 120 taps each is
+ * worth `floor(N * 120 / 1000)` exchanges, so a profile is never handed retro
+ * grants and never inherits a debt it cannot see.
+ */
+export function migrateWardrobeCursor(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const input = value as Record<string, unknown>
+  // Anything already on the current ledger is left untouched. A missing tag is
+  // legacy by construction: this runs on the file the host just read, and every
+  // document written by 0.9.4+ carries the tag.
+  if (input.ledger === 'taps1000') return value
+  const claimed = typeof input.claimed === 'number' && Number.isFinite(input.claimed)
+    ? Math.max(0, Math.round(input.claimed))
+    : 0
+  return {
+    ...input,
+    claimed: Math.floor((claimed * LEGACY_TAPS_PER_DROP) / TAPS_PER_EXCHANGE),
+    ledger: 'taps1000'
+  }
 }
 
 /** How many items the wardrobe holds (used by the panel's progress line). */
@@ -374,12 +423,18 @@ export function pendingExchanges(state: WardrobeState, totalTaps: number, max = 
   return Math.max(0, Math.min(due, max))
 }
 
-/** Taps until the next exchange (1..TAPS_PER_EXCHANGE); 0 when one is ready. */
+/**
+ * Taps until the next exchange; 0 when one is ready.
+ *
+ * Derived from the cursor, not from `taps % 1000`: if `claimed` ever runs ahead
+ * of `floor(taps / 1000)` (a migrated or hand-edited profile), the modulo form
+ * promised an exchange every 1000 taps that never arrived. This one always
+ * names the tap at which the count actually changes.
+ */
 export function tapsUntilNextExchange(state: WardrobeState, totalTaps: number): number {
-  const remainder = Math.floor(Math.max(0, totalTaps)) % TAPS_PER_EXCHANGE
-  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_EXCHANGE) - state.claimed
-  if (due > 0) return 0
-  return TAPS_PER_EXCHANGE - remainder
+  const taps = Math.floor(Math.max(0, totalTaps))
+  if (Math.floor(taps / TAPS_PER_EXCHANGE) > state.claimed) return 0
+  return Math.max(1, (state.claimed + 1) * TAPS_PER_EXCHANGE - taps)
 }
 
 /**

@@ -65,6 +65,7 @@ import {
   type BongoCatSettings
 } from './shared/settings-contract'
 import { pruneWidgets } from './shared/widgets'
+import { migrateWardrobeCursor, sanitizeWardrobe } from './shared/cosmetics'
 
 export const name = 'bongo-cat'
 
@@ -698,6 +699,14 @@ export function apply(ctx: Context) {
     // A widget type can be retired between versions; drop those instances so
     // the dock never renders a card whose definition is gone.
     next.widgets = pruneWidgets(next.widgets)
+    // 0.9.3 moved the wardrobe from "one drop per 120 taps" to "one exchange
+    // per 1000" without re-basing `claimed`, which left every profile that had
+    // already collected drops with a cursor larger than `floor(taps / 1000)` —
+    // a debt no amount of tapping could clear. This is the only place that can
+    // tell an old file from a current client, so the re-base happens here; then
+    // the document is normalised so a hand-edited file cannot inject junk.
+    const wardrobe = sanitizeWardrobe(migrateWardrobeCursor(stored.wardrobe))
+    if (wardrobe.ok) next.wardrobe = wardrobe.value
     // `skin` used to be a built-in art id ("classic", ...). It now holds a
     // Steam sprite prefix, so a stale value would make every re-extract fail
     // with "sprites missing for skin 'classic'". Anything the catalog does not

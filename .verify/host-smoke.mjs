@@ -388,5 +388,73 @@ console.log('— bad requests —')
 r = await rpc('nope/unknown')
 check('unknown endpoint rejected', r.ok === false && /unknown bongo-cat endpoint/.test(r.error?.message ?? ''))
 
+/* ------------------------------------------------------------------ */
+/* legacy profile: the 120-tap cursor is re-based onto 1000            */
+/* ------------------------------------------------------------------ */
+
+console.log('— legacy wardrobe cursor —')
+
+// A second boot with its own storage dir. loadSettings() is the only place
+// that can tell an old file from a current client, so the migration can only
+// be exercised by starting the plugin against a real settings.json.
+const legacyHome = mkdtempSync(join(tmpdir(), 'dsh-bongo-legacy-'))
+const legacyDir = join(legacyHome, 'storages', 'bongo-cat')
+mkdirSync(legacyDir, { recursive: true })
+const legacyFile = join(legacyDir, 'settings.json')
+
+const bootLegacy = async (payload) => {
+  if (payload !== undefined) writeFileSync(legacyFile, JSON.stringify(payload))
+  process.env.DSH_HOME = legacyHome
+  const bootedRoutes = []
+  apply({
+    webServer: { register: (route) => { bootedRoutes.push(route) } },
+    effect: (fn) => fn(),
+    on: () => () => {},
+    get: () => ({})
+  })
+  return async (endpoint, body = {}) => {
+    const route = bootedRoutes.find((item) => item.kind === 'prefix' && item.path === '/bongo-cat')
+    const response = await callRoute(route, 'POST', `/bongo-cat/${endpoint}`, body, endpoint)
+    return JSON.parse(response.body).result
+  }
+}
+
+// Seven drops under the old rule cost 840 taps; the new ledger is 1000/tap.
+const legacyWardrobe = {
+  equipped: { hat: 'beanie', face: null, accessory: null },
+  fur: 'original',
+  owned: { beanie: 1, blush: 1, scarf: 1 },
+  claimed: 7,
+  filter: 'all'
+}
+let legacyRpc = await bootLegacy({ counter: 878, wardrobe: legacyWardrobe })
+r = await legacyRpc('config/get')
+check('a pre-0.9.4 cursor is re-based instead of carried as debt',
+  r.ok === true && r.value.wardrobe.claimed === 0, `claimed=${r.value?.wardrobe?.claimed}`)
+check('the migrated ledger carries the 1000-tap tag',
+  r.value?.wardrobe?.ledger === 'taps1000', String(r.value?.wardrobe?.ledger))
+check('migration preserves the items and the tap total',
+  r.value?.wardrobe?.owned?.beanie === 1 && r.value?.counter === 878,
+  JSON.stringify({ counter: r.value?.counter, owned: r.value?.wardrobe?.owned }))
+
+// Writing the document back must not subtract a second time.
+r = await legacyRpc('config/set', { patch: { wardrobe: r.value.wardrobe } })
+check('the re-base is idempotent across a write', r.ok === true && r.value.wardrobe.claimed === 0, `claimed=${r.value?.wardrobe?.claimed}`)
+const persistedWardrobe = JSON.parse(readFileSync(legacyFile, 'utf8')).wardrobe
+check('the migrated document is written back tagged', persistedWardrobe.ledger === 'taps1000' && persistedWardrobe.claimed === 0, JSON.stringify(persistedWardrobe))
+
+// A document already on the new ledger keeps its cursor untouched.
+legacyRpc = await bootLegacy({ counter: 878, wardrobe: { ...legacyWardrobe, claimed: 4, ledger: 'taps1000' } })
+r = await legacyRpc('config/get')
+check('a tagged cursor is never re-based', r.ok === true && r.value.wardrobe.claimed === 4, `claimed=${r.value?.wardrobe?.claimed}`)
+
+// A wardrobe sent without the tag by a current client is not mistaken for a
+// legacy file (the sanitizer leaves the cursor alone; only the load path
+// migrates).
+r = await legacyRpc('config/set', { patch: { wardrobe: { ...legacyWardrobe, claimed: 6 } } })
+check('a client write without the tag keeps its cursor', r.ok === true && r.value.wardrobe.claimed === 6, `claimed=${r.value?.wardrobe?.claimed}`)
+
+process.env.DSH_HOME = DSH_HOME
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

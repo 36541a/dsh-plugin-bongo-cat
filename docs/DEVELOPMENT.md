@@ -405,7 +405,9 @@ apply()
 
 **写回为什么要串行。** 点击道具本身也是一次 pointerdown，猫会把它当作敲击；装备与（可能的）兑换都改同一个 `wardrobe` 字段，朴素写法下后者会把前者的装备覆盖掉（实测复现过）。`writer.ts` 用 per-store promise 链，在**上一次写入落地之后**才读取最新快照再计算，保证读-改-写成对。
 
-**兑换的账本。** 规则是每 1000 次敲击换 1 件（`TAPS_PER_EXCHANGE`）。`claimed` 是已兑换的序号，`floor(taps / 1000) - claimed` 是可用次数。敲击本身不再发奖：计数只走 `stats/bump`，面板打开时用 `store.refreshCounter()` 只合并这一个字段（不整份覆盖，避免打断正在进行的编辑），按钮在 `pendingExchanges() > 0` 时才可点，一次最多结算 10 件。稀有度权重 8/4/1。
+**兑换的账本。** 规则是每 1000 次敲击换 1 件（`TAPS_PER_EXCHANGE`）。`claimed` 是已兑换的序号，`floor(taps / 1000) - claimed` 是可用次数。
+
+**账本换单位（0.9.4）。** `claimed` 的单位由 `ledger` 标签声明（`taps120` / `taps1000`）。换规则时不能只改除数：老 profile 的 `claimed` 是按 120 次一件记的，直接拿去减 1000 次一件的额度会长期为负，按钮永远不亮。所以 `migrateWardrobeCursor()` 只在 **load 路径**（读 `settings.json`、能判断“文件早于标签”）做一次 `floor(claimed × 120 / 1000)`；`sanitizeWardrobe()` 只原样保留标签，绝不换算——否则旧客户端整份回写会被二次扣减。倒计时也据此从游标推导，而不是 `taps % 1000`。敲击本身不再发奖：计数只走 `stats/bump`，面板打开时用 `store.refreshCounter()` 只合并这一个字段（不整份覆盖，避免打断正在进行的编辑），按钮在 `pendingExchanges() > 0` 时才可点，一次最多结算 10 件。稀有度权重 8/4/1。
 
 **扩展一件道具**：在 `COSMETIC_ITEMS` 加一条（id、slot、rarity、x/y/w、SVG inner markup），需要“在猫身后”就加 `layer: 'back'`。面板、兑换、校验、i18n 都不用动；`pnpm typecheck` 会盯住类型，`host-smoke` 会盯住“没拥有的不能穿”。
 
@@ -460,7 +462,7 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（74 项，含契约对账、RPC 信封、loopback 写保护、组件 schema 与衣柜清洗）；⑥ browser 冒烟（63 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化、贴纸前后层、点猫开设置与拖拽/双击的互斥）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（81 项，含契约对账、RPC 信封、loopback 写保护、组件 schema、衣柜清洗与账本迁移）；⑥ browser 冒烟（63 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化、贴纸前后层、点猫开设置与拖拽/双击的互斥）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 
