@@ -44,7 +44,15 @@ window.__ModuleLoader__ = {
 
 // The in-memory host starts from the CONTRACT defaults — the same source
 // the real host schema is built from.
-const serverState = { ...SETTINGS_DEFAULTS }
+const serverState = {
+  ...SETTINGS_DEFAULTS,
+  // Two widgets are pre-seeded so the dock has something to reconcile on boot;
+  // the add/remove flow itself is covered by the browser suite (vm/ui.mjs).
+  widgets: [
+    { id: 'clock', type: 'clock', enabled: true, x: 120, y: 120, size: 'sm', opacity: 1, config: { hour12: false, seconds: true, showDate: true } },
+    { id: 'steam', type: 'steam', enabled: true, x: 120, y: 280, size: 'md', opacity: 1, config: { limit: 3, showPlaytime: true } }
+  ]
+}
 
 const connection = {
   isLoopback: true,
@@ -72,6 +80,22 @@ const connection = {
       }
       if (method === 'native/remove') {
         return { ok: true, value: { removed: true } }
+      }
+      if (method === 'steam/library') {
+        return {
+          ok: true,
+          value: {
+            source: 'steam',
+            games: [
+              { appid: 1337970, name: 'Bongo Cat', playtimeMinutes: 90, lastPlayed: 2 },
+              { appid: 620, name: 'Portal 2', playtimeMinutes: 600, lastPlayed: 1 }
+            ]
+          }
+        }
+      }
+      if (method === 'steam/launch') {
+        serverState.launched = payload.appid
+        return { ok: true, value: { launched: true } }
       }
       return { ok: false, error: { code: 'bad-request', message: `unexpected ${method}` } }
     }
@@ -263,9 +287,38 @@ console.log('— stats flush —')
 const flushResult = await payload.rpc.call('/bongo-cat', 'stats/bump', { count: 3 })
 check('rpc stats/bump reaches host', flushResult.ok === true && flushResult.value.counter === keyBefore + 3, JSON.stringify(flushResult))
 
+console.log('— widget dock —')
+const widgetLayer = document.getElementById('dsh-bongo-cat-widgets')
+const catRoot = document.getElementById('dsh-bongo-cat-root')
+check('widget layer mounts', widgetLayer !== null)
+check('widget layer is independent of the cat root', widgetLayer !== null && catRoot !== null && !catRoot.contains(widgetLayer))
+check('pre-seeded widgets are mounted', document.querySelectorAll('.bc-widget').length === 2, String(document.querySelectorAll('.bc-widget').length))
+
+const clockCard = document.querySelector('.bc-widget[data-widget-type="clock"]')
+check('clock card renders a time', /\d{1,2}:\d{2}/.test(clockCard?.textContent ?? ''), clockCard?.textContent ?? 'none')
+check('clock card carries its instance id', clockCard?.getAttribute('data-widget-id') === 'clock')
+
+const steamRows = [...document.querySelectorAll('.bc-widget[data-widget-type="steam"] .bc-widget-steam-row')]
+check('steam widget lists installed games', steamRows.length === 2, `rows=${steamRows.length}`)
+steamRows[0]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+await sleep(80)
+check('clicking a game asks the host to launch it', serverState.launched === 1337970, String(serverState.launched))
+
+// Drag: pointerdown on the card, move, release. jsdom has no layout, so assert
+// the style moved and that the new seat was persisted through config/set.
+const beforeSeat = serverState.widgets.find((widget) => widget.id === 'clock').x
+clockCard?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 130, clientY: 130 }))
+clockCard?.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 260, clientY: 200 }))
+clockCard?.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 260, clientY: 200 }))
+await sleep(80)
+const afterSeat = serverState.widgets.find((widget) => widget.id === 'clock').x
+check('dragging moves the card', clockCard?.style.left === '130px', clockCard?.style.left ?? 'none')
+check('the new seat is persisted', afterSeat !== beforeSeat, `${beforeSeat} -> ${afterSeat}`)
+
 console.log('— dispose —')
 for (const disposer of effects) if (typeof disposer === 'function') disposer()
 check('overlay removed after dispose', root() === null)
+check('widget layer removed after dispose', document.getElementById('dsh-bongo-cat-widgets') === null)
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

@@ -29,6 +29,15 @@ export type BongoCatKey =
   | 'presetLabel' | 'presetFocus' | 'presetZen' | 'presetParty' | 'presetNight' | 'presetApplied'
   | 'counterLabel' | 'counterReset'
   | 'loading' | 'unavailable' | 'remoteWarning' | 'tooLarge' | 'busy'
+  // widgets
+  | 'widgetSection' | 'widgetHint' | 'widgetAdd' | 'widgetRemove' | 'widgetEmpty'
+  | 'widgetSize' | 'widgetSizeSm' | 'widgetSizeMd' | 'widgetOpacity'
+  | 'widgetClock' | 'widgetClockDesc' | 'widgetHour12' | 'widgetSeconds' | 'widgetShowDate'
+  | 'widgetCounter' | 'widgetCounterDesc' | 'widgetCounterTotal' | 'widgetCounterSession' | 'widgetSource'
+  | 'widgetFocus' | 'widgetFocusDesc' | 'widgetFocusStart' | 'widgetFocusPause' | 'widgetFocusReset'
+  | 'widgetMinutes' | 'widgetChime'
+  | 'widgetSteam' | 'widgetSteamDesc' | 'widgetSteamRefresh' | 'widgetSteamLoading' | 'widgetSteamEmpty'
+  | 'widgetSteamFailed' | 'widgetSteamLocalOnly' | 'widgetSteamLaunchFailed' | 'widgetLimit' | 'widgetShowPlaytime'
 
 /** Status of the extracted original (Steam) artwork. */
 export interface NativeStatus {

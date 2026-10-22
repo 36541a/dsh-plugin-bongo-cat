@@ -115,6 +115,42 @@ const cssModulePlugin = {
 }
 
 /* ------------------------------------------------------------------ */
+/* Global CSS (not scoped)                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Plain `.css` imports are injected verbatim under their own style tag.
+ *
+ * Widgets build their DOM with literal class names (`bc-widget`, …) because
+ * each widget is its own module and threading a class map through the
+ * registry would buy nothing: widget classes are a private, namespaced
+ * contract between one widget file and one stylesheet. CSS modules stay the
+ * rule for React components, where class names do cross module boundaries.
+ */
+const globalCssPlugin = {
+  name: 'bongo-cat-global-css',
+  setup(build) {
+    build.onLoad({ filter: /\.css$/ }, async (args) => {
+      if (args.path.endsWith('.module.css')) return null
+      const css = await readFile(args.path, 'utf8')
+      const tagId = PLUGIN_ID + '/' + path.relative(ROOT, args.path).replaceAll('\\', '/')
+      const contents = [
+        'var tagId = ' + JSON.stringify(tagId) + ';',
+        'if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {',
+        '  var tag = document.createElement("style");',
+        '  tag.dataset.plugin = ' + JSON.stringify(PLUGIN_ID) + ';',
+        '  tag.dataset.pluginCss = tagId;',
+        '  tag.textContent = ' + JSON.stringify(css) + ';',
+        '  document.head.appendChild(tag);',
+        '}',
+        'export default {};'
+      ].join('\n')
+      return { contents, loader: 'js' }
+    })
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Build                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -143,7 +179,7 @@ const client = await build({
   jsx: 'automatic',
   target: ['chrome110', 'firefox110', 'safari16'],
   external: CLIENT_EXTERNALS,
-  plugins: [cssModulePlugin],
+  plugins: [cssModulePlugin, globalCssPlugin],
   logLevel: 'info'
 })
 

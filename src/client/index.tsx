@@ -32,6 +32,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 
 import { BongoCatSection } from './BongoCatSection'
 import { attachBongoCat } from './cat'
+import { attachWidgetDock } from './widgets/dock'
 import { BongoCatStore } from './store'
 import { BONGO_CAT_NS, BongoCatKey } from './settings'
 
@@ -93,7 +94,43 @@ const zh: Record<BongoCatKey, string> = {
   unavailable: '无法读取邦哥猫设置。',
   remoteWarning: '当前页面并非本机访问，无法导入皮肤或音效（仅本机可写入）。',
   tooLarge: '文件过大（图片 ≤ 8 MB，音效 ≤ 2 MB）。',
-  busy: '处理中…'
+  busy: '处理中…',
+  widgetSection: '桌面组件',
+  widgetHint: '组件与猫咪互相独立：可以只开组件不开猫，也可以同一类型放好几个。按住组件标题栏拖动摆放，窗口变小时会自动收回可视区。',
+  widgetAdd: '添加组件',
+  widgetRemove: '移除',
+  widgetEmpty: '还没有组件。从下面挑一个加上吧。',
+  widgetSize: '尺寸',
+  widgetSizeSm: '小',
+  widgetSizeMd: '中',
+  widgetOpacity: '不透明度',
+  widgetClock: '时钟',
+  widgetClockDesc: '本地时间与日期，可关秒数、切换 12/24 小时。',
+  widgetHour12: '12 小时制',
+  widgetSeconds: '显示秒',
+  widgetShowDate: '显示日期',
+  widgetCounter: '敲击统计',
+  widgetCounterDesc: '读宿主持久化的总敲击数，或只统计本次会话。',
+  widgetCounterTotal: '累计敲击',
+  widgetCounterSession: '本次会话',
+  widgetSource: '数据来源',
+  widgetFocus: '专注计时',
+  widgetFocusDesc: '一个倒计时番茄钟，到点响两声。',
+  widgetFocusStart: '开始',
+  widgetFocusPause: '暂停',
+  widgetFocusReset: '重置',
+  widgetMinutes: '分钟',
+  widgetChime: '结束提示音',
+  widgetSteam: 'Steam 游戏',
+  widgetSteamDesc: '列出本机已安装的 Steam 游戏（按最近游玩排序），点一下启动。',
+  widgetSteamRefresh: '刷新',
+  widgetSteamLoading: '正在读取 Steam 库…',
+  widgetSteamEmpty: '没有读到已安装的游戏。',
+  widgetSteamFailed: '读取 Steam 库失败。',
+  widgetSteamLocalOnly: '只能在本机页面启动游戏。',
+  widgetSteamLaunchFailed: '启动失败，请确认 Steam 正在运行。',
+  widgetLimit: '显示条数',
+  widgetShowPlaytime: '显示时长'
 }
 
 const en: Record<BongoCatKey, string> = {
@@ -146,7 +183,43 @@ const en: Record<BongoCatKey, string> = {
   unavailable: 'Bongo Cat settings are unavailable.',
   remoteWarning: 'This page is not opened from this machine; importing skins or sounds is unavailable (writes are loopback-only).',
   tooLarge: 'File too large (images ≤ 8 MB, sounds ≤ 2 MB).',
-  busy: 'Working…'
+  busy: 'Working…',
+  widgetSection: 'Desktop widgets',
+  widgetHint: 'Widgets are independent of the cat: run them with the cat off, or place several of the same type. Drag a widget by its header; it is pulled back into view when the window shrinks.',
+  widgetAdd: 'Add widget',
+  widgetRemove: 'Remove',
+  widgetEmpty: 'No widgets yet. Pick one below.',
+  widgetSize: 'Size',
+  widgetSizeSm: 'Small',
+  widgetSizeMd: 'Medium',
+  widgetOpacity: 'Opacity',
+  widgetClock: 'Clock',
+  widgetClockDesc: 'Local time and date, with optional seconds and 12/24h.',
+  widgetHour12: '12-hour clock',
+  widgetSeconds: 'Show seconds',
+  widgetShowDate: 'Show date',
+  widgetCounter: 'Tap counter',
+  widgetCounterDesc: 'The persisted lifetime total, or just this session.',
+  widgetCounterTotal: 'Lifetime taps',
+  widgetCounterSession: 'This session',
+  widgetSource: 'Source',
+  widgetFocus: 'Focus timer',
+  widgetFocusDesc: 'A countdown pomodoro that chimes when it ends.',
+  widgetFocusStart: 'Start',
+  widgetFocusPause: 'Pause',
+  widgetFocusReset: 'Reset',
+  widgetMinutes: 'Minutes',
+  widgetChime: 'Chime at the end',
+  widgetSteam: 'Steam games',
+  widgetSteamDesc: 'Installed Steam games, most recently played first; click to launch.',
+  widgetSteamRefresh: 'Refresh',
+  widgetSteamLoading: 'Reading your Steam library…',
+  widgetSteamEmpty: 'No installed games found.',
+  widgetSteamFailed: 'Could not read the Steam library.',
+  widgetSteamLocalOnly: 'Games can only be launched from this machine.',
+  widgetSteamLaunchFailed: 'Launch failed — is Steam running?',
+  widgetLimit: 'Rows',
+  widgetShowPlaytime: 'Show playtime'
 }
 
 export const inject = ['slots', 'locale', 'connection']
@@ -160,6 +233,9 @@ export function apply(ctx: ClientContext) {
   const t = (key: BongoCatKey): string => translate(key)
   void store.load()
   ctx.effect(() => attachBongoCat(ctx, store, connection.rpc, t), 'bongo-cat: overlay')
+  // Widgets are a sibling of the cat, not a child: they render even when the
+  // cat is disabled, and the cat has no reference to the dock.
+  ctx.effect(() => attachWidgetDock(store, connection.rpc, t, connection.isLoopback), 'bongo-cat: widgets')
 
   const injected = () => ({
     store,

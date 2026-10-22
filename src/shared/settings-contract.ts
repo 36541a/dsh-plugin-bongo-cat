@@ -30,16 +30,18 @@
  * hand-write a parallel list anywhere else.
  */
 
+import { type WidgetInstance, sanitizeWidgets } from './widgets'
+
 /** Anchor corner of the floating cat. */
 export const POSITIONS = ['bottom-right', 'bottom-left', 'top-left', 'top-right'] as const
 export type BongoCatPosition = (typeof POSITIONS)[number]
 
 /** Field kinds the contract knows how to describe and validate. */
-export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position' | 'enum'
+export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position' | 'enum' | 'widgets'
 
 export interface FieldMeta {
   kind: FieldKind
-  default: boolean | string | number
+  default: boolean | string | number | readonly WidgetInstance[]
   /** inclusive lower bound (natural / number) */
   min?: number
   /** inclusive upper bound (natural / number) */
@@ -84,7 +86,13 @@ export const SETTINGS_FIELDS = {
   /** Total taps, persisted here and bumped through stats/bump. */
   counter: { kind: 'natural', default: 0, writable: false },
   /** One-shot first-run hint already shown. */
-  hintSeen: { kind: 'boolean', default: false }
+  hintSeen: { kind: 'boolean', default: false },
+  /**
+   * Desktop widgets (clock / counter / focus / Steam launcher), each an
+   * independent instance with its own seat, size and config. Empty by default:
+   * the cat alone is the plugin's original behaviour, widgets are opt-in.
+   */
+  widgets: { kind: 'widgets', default: [] }
 } as const satisfies Record<string, FieldMeta>
 
 export type SettingsKey = keyof typeof SETTINGS_FIELDS
@@ -98,13 +106,18 @@ export const WRITABLE_FIELDS: SettingsKey[] = (Object.entries(SETTINGS_FIELDS) a
 type DefaultOf<M extends FieldMeta> =
   M extends { kind: 'boolean' } ? boolean
     : M extends { kind: 'position' } ? BongoCatPosition
-      : M extends { kind: 'string' | 'enum' } ? string
-        : number
+      : M extends { kind: 'widgets' } ? WidgetInstance[]
+        : M extends { kind: 'string' | 'enum' } ? string
+          : number
 export type BongoCatSettings = { [K in SettingsKey]: DefaultOf<(typeof SETTINGS_FIELDS)[K]> }
 
 /** Defaults object, derived from the contract. */
 export const SETTINGS_DEFAULTS: BongoCatSettings = Object.fromEntries(
-  Object.entries(SETTINGS_FIELDS).map(([key, meta]) => [key, meta.default])
+  Object.entries(SETTINGS_FIELDS).map(([key, meta]) => [
+    key,
+    // Arrays are cloned per call site so no consumer can mutate the contract.
+    Array.isArray(meta.default) ? [...meta.default] : meta.default
+  ])
 ) as BongoCatSettings
 
 export type SanitizeResult =
@@ -177,6 +190,12 @@ export function sanitizeSettingsPatch(patch: unknown): SanitizeResult {
           return fail(`${key} must be one of ${values.join(', ')}`)
         }
         clean[key] = value
+        break
+      }
+      case 'widgets': {
+        const result = sanitizeWidgets(value)
+        if (!result.ok) return fail(`${key}: ${result.error}`)
+        clean[key] = result.value
         break
       }
     }

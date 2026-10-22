@@ -19,7 +19,25 @@
 - **省电暂停**：页面隐藏时冻结全部动画并挂起音频，切回即恢复
 - **悬浮桌宠**：默认停在右下角，按住可拖到任意位置，双击循环切换四个角；大小、速度、边距均可调
 - **设置单一真源**：host 与 browser 的设置 schema 从同一份契约派生，杜绝"改了不生效"
-- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、清单/模块表核对、双端 113 项断言，push/PR 自动跑
+- **Steam 桌面组件**：时钟 / 敲击统计 / 专注计时 / Steam 游戏启动器四种小组件，与猫咪互相独立、可任意搭配、拖动摆放
+- **两级守卫 + CI**：构建新鲜度、契约对账、CSS 模块键名核对、清单/模块表核对、双端 137 项断言，push/PR 自动跑
+
+## 桌面组件
+
+除了那只猫，插件还能挂一组**独立的小组件**。组件与猫完全解耦——关掉猫，组件照样在；反过来也一样。
+
+| 组件 | 能做什么 | 可调项 |
+|---|---|---|
+| **时钟** | 本地时间与日期 | 12/24 小时制、是否显示秒、是否显示日期 |
+| **敲击统计** | 累计敲击数（读宿主持久化值）或本次会话 | 数据来源 |
+| **专注计时** | 1–120 分钟倒计时，开始/暂停/重置，到点响两声 | 时长、结束提示音 |
+| **Steam 游戏** | 列出本机已安装的 Steam 游戏，按最近游玩排序，点一下启动 | 显示条数、是否显示时长 |
+
+**怎么组合**：同一类型可以放好几个（`clock`、`clock-2`…），最多 12 个；每个组件有自己的位置、尺寸（小/中）和不透明度；绘制层级等于列表顺序。在设置里点「+ 时钟」这类按钮添加，按住卡片标题栏拖动摆放，窗口变小时会自动收回可视区。
+
+**怎么配置**：设置 → 邦哥猫 → 桌面组件，每个实例都有独立开关与配置；布局与配置存进同一份设置文档，重启后原样恢复。
+
+**边界**：Steam 启动器只在本机页面可用（host 端 loopback 校验，`steam/launch` 不在跨机白名单里）；`steam/library` 只读 `appmanifest_*.acf`，不碰游戏目录，也不会因为某个清单损坏而整体失败。
 
 ## 安装
 
@@ -119,8 +137,17 @@ dsh-plugin-bongo-cat/
 │       ├── sound.ts              #   WebAudio 合成音效
 │       ├── store.ts              #   /bongo-cat RPC 配置存储（合写）
 │       ├── settings.ts           #   线上类型与字典键（设置类型从契约再导出）
-│       ├── BongoCatSection.tsx   #   设置面板
-│       └── BongoCatSection.module.css
+│       ├── BongoCatSection.tsx   #   设置面板（含组件管理）
+│       ├── BongoCatSection.module.css
+│       └── widgets/              #   桌面组件
+│           ├── registry.ts       #     WidgetDefinition + 注册表（扩展点）
+│           ├── dock.ts           #     组件层：实例增删、拖动、持久化
+│           ├── clock.ts          #     时钟
+│           ├── counter.ts        #     敲击统计
+│           ├── focus.ts          #     专注计时
+│           ├── steam.ts          #     Steam 游戏启动器
+│           ├── chime.ts          #     共用提示音
+│           └── widgets.css       #     组件样式（全局，支持深浅色）
 ├── scripts/
 │   ├── build.mjs                 # esbuild：双端构建 + CSS Modules + ModuleLoader 包裹
 │   └── verify.mjs                # 两级守卫运行器（硬/软档）
@@ -142,7 +169,7 @@ dsh-plugin-bongo-cat/
 pnpm install
 pnpm typecheck   # 需要 DSH 仓库的 @deepseek-ai/* 依赖（见文档）
 pnpm build       # esbuild → lib/index.js + lib/client.js
-pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + manifest 20 项 + host 54 项 + browser 39 项断言
+pnpm verify      # 硬档守卫：新鲜度 + 契约 + CSS 键名 + manifest 20 项 + host 68 项 + browser 49 项断言
 pnpm verify:soft # 软档守卫：发布面 / i18n / CHANGELOG（不挡人）
 pnpm lint        # plain-JS 工具面（scripts/ 与 .verify/）
 ```

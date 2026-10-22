@@ -183,6 +183,52 @@ try {
 }
 check('config/set persists settings.json', persisted !== undefined && persisted.skin === 'Black' && persisted.offsetX === 12, JSON.stringify(persisted))
 
+console.log('— widgets contract —')
+
+const clockInstance = {
+  id: 'clock', type: 'clock', enabled: true, x: 40, y: 300, size: 'sm', opacity: 1,
+  config: { hour12: false, seconds: true, showDate: true }
+}
+const steamInstance = {
+  id: 'steam', type: 'steam', enabled: true, x: 40, y: 420, size: 'md', opacity: 0.9,
+  config: { limit: 3, showPlaytime: false }
+}
+
+r = await rpc('config/set', { patch: { widgets: [clockInstance, steamInstance] } })
+check('config/set accepts widget instances', r.ok === true && r.value.widgets.length === 2, JSON.stringify(r).slice(0, 200))
+
+r = await rpc('config/get')
+check('widgets round-trip through the store', r.ok === true && r.value.widgets?.[0]?.id === 'clock' && r.value.widgets?.[1]?.config?.limit === 3, JSON.stringify(r.value?.widgets)?.slice(0, 200))
+
+// Normalisation: unknown config keys are dropped, missing one fall back to the
+// type defaults, and numbers clamp — a newer build stays readable.
+r = await rpc('config/set', { patch: { widgets: [
+  { ...clockInstance, config: { hour12: true, bogus: 1 } },
+  { ...steamInstance, config: { limit: 99 } }
+] } })
+check('widget config is normalised, not rejected', r.ok === true && r.value.widgets[0].config.showDate === true && r.value.widgets[0].config.bogus === undefined, JSON.stringify(r.value?.widgets?.[0]?.config))
+check('out-of-range widget config clamps', r.ok === true && r.value.widgets[1].config.limit === 8, String(r.value?.widgets?.[1]?.config?.limit))
+
+const rejected = async (label, widgets) => {
+  const result = await rpc('config/set', { patch: { widgets } })
+  check(label, result.ok === false && result.error?.code === 'bad-request', JSON.stringify(result).slice(0, 160))
+}
+await rejected('duplicate widget ids are rejected', [clockInstance, { ...clockInstance }])
+await rejected('unknown widget type is rejected', [{ ...clockInstance, type: 'weather' }])
+await rejected('widget opacity out of range is rejected', [{ ...clockInstance, opacity: 0.1 }])
+await rejected('widget id with bad characters is rejected', [{ ...clockInstance, id: 'Clock!' }])
+const tooMany = Array.from({ length: 13 }, (_, index) => ({ ...clockInstance, id: `clock-${index}` }))
+await rejected('more than twelve widgets are rejected', tooMany)
+check('rejected widget patches leave the list untouched', (await rpc('config/get')).value.widgets.length === 2)
+
+console.log('— steam library —')
+r = await rpc('steam/library')
+check('steam/library answers', r.ok === true && Array.isArray(r.value?.games), JSON.stringify(r).slice(0, 160))
+check('steam/library reports a source', r.ok === true && ['steam', 'none'].includes(r.value?.source), String(r.value?.source))
+check('steam/library entries are well formed', r.ok === true && r.value.games.every((game) => Number.isInteger(game.appid) && typeof game.name === 'string'), `games=${r.value?.games?.length}`)
+r = await rpc('steam/launch', { appid: 'not-a-number' })
+check('steam/launch rejects a non-numeric appid', r.ok === false && r.error?.code === 'bad-request', JSON.stringify(r).slice(0, 160))
+
 console.log('— stats —')
 r = await rpc('stats/bump', { count: 5 })
 check('stats/bump accumulates', r.ok === true && r.value.counter === 5, JSON.stringify(r))

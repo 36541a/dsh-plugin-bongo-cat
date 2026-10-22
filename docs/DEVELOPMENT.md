@@ -359,6 +359,35 @@ dsh-wallpaper-engine 的招牌省电特性是"遮挡暂停"，但它对**窗口�
 
 `presets.ts` 的四个预置（专注 / 禅域 / 派对 / 夜猫）是相关设置键的**完整补丁快照**，经**单个** `config/set` 落盘——host 的契约消毒器整块校验，要么全落要么不落，不存在"半应用的心情"。这是 dsh-wallpaper-engine ADR-0011「预设保存整套配置」思想的桌宠尺度简化；用户可存预设（JSON 导入导出）在路线图上（见 ANALYSIS §7）。
 
+### 5.12.1 桌面组件（v0.8.0）
+
+**为什么要独立一层**：猫是"一个固定的悬浮体"，组件是"N 个可摆放的小卡片"，两者的生命周期、布局规则和失败方式都不一样。把它们塞进 `cat.ts` 会让猫的控制器同时承担布局引擎和四种业务，所以拆成同级的第二层：
+
+```
+apply()
+├── attachBongoCat(...)   → #dsh-bongo-cat-root      一个精灵
+└── attachWidgetDock(...) → #dsh-bongo-cat-widgets   N 张卡片
+```
+
+两层共享 `BongoCatStore` 与 `connection.rpc`，**互不引用**：关猫不影响组件，组件层销毁（`effect` 回收）也不碰猫。`client-smoke` 里有一条断言专门钉这个——`catRoot.contains(widgetLayer) === false`。
+
+**四段职责**
+
+| 文件 | 职责 | 不该知道的事 |
+|---|---|---|
+| `src/shared/widgets.ts` | 实例/配置 schema、默认值、清洗、`newWidget`/`withWidget`/`withoutWidget` | DOM、RPC |
+| `widgets/registry.ts` | `WidgetDefinition` 接口 + 注册表 | 布局、store 变更 |
+| `widgets/*.ts` | 一种组件的绘制与自身交互（`mount(host, ctx)` → `update`/`destroy`） | 别的组件、dock、猫 |
+| `widgets/dock.ts` | 实例协调：增删、拖动、clamp、持久化 | 具体画什么 |
+
+**契约接入**：`widgets` 是设置契约里唯一的数组字段（`kind: 'widgets'`）。host 用 `sanitizeWidgets` **原子**校验整份数组——重复 id、未知类型、越界透明度、超过 12 个实例都 `bad-request`；而每个实例的 `config` 走**前向兼容**策略（未知键丢弃、缺失键回默认、数值 clamp）。区别的理由：顶层字段漂移会让用户"改了不生效"，而组件配置是版本间双向流动的，严格拒绝会让降级用户整份设置写不回去。
+
+**布局规则**：坐标是视口像素，落在 `x/y`；拖动只在 `pointerup` 落盘一次（合写器），不会每个 `pointermove` 打一次 `config/set`；窗口缩放时只做视觉 clamp，不改存储的坐标——把窗口缩小再放大，用户原本的摆位还在。
+
+**扩展一种组件**：`WIDGET_TYPES` 加一项 → `WIDGET_CONFIG_DEFAULTS`/`WIDGET_LABEL_KEYS`/`sanitizeWidgetConfig` 各加一个分支 → 在 `widgets/` 写一个 `WidgetDefinition` 并登记进 `WIDGET_DEFINITIONS` → 字典加 label/desc 两个键。dock、设置面板、host 校验都不用改；漏了某一环，`pnpm typecheck`（`WidgetConfigOf` 的穷尽映射）或 i18n 三查会先红。
+
+**样式**：组件用字面类名（`bc-widget*`）而不是 CSS Modules，因为这些类只在"一个组件文件 ↔ 一张样式表"之间流通，过一遍哈希表没有收益。为此构建里加了一条全局 `.css` 通道（`globalCssPlugin`），CSS Modules 仍是 React 组件的规则。
+
 ### 5.13 原版美术模式（v0.3.0）
 
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
@@ -396,7 +425,7 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（54 项，含契约对账、RPC 信封与 loopback 写保护）；⑥ browser 冒烟（39 项，jsdom 里跑真实产物）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（68 项，含契约对账、RPC 信封、loopback 写保护与组件 schema）；⑥ browser 冒烟（49 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 

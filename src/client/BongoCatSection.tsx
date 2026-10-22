@@ -6,6 +6,11 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+import {
+  WIDGET_LIMIT, WIDGET_TYPES,
+  WidgetInstance, newWidget, withoutWidget
+} from '../shared/widgets'
+import { WIDGET_DEFINITIONS } from './widgets/registry'
 import { PRESETS } from './presets'
 import {
   BongoCatSettings, BongoCatKey, ImportResult, NativeStatus, RpcResult, ScannedRoot,
@@ -219,6 +224,27 @@ export function BongoCatSection(props: BongoCatSectionProps) {
     })
   }
 
+  /**
+   * Widget list edits all go through one array patch: the host validates the
+   * whole list atomically, so a half-applied layout is impossible. The casts
+   * are the price of a discriminated union whose members share one editor.
+   */
+  const patchWidgets = async (next: WidgetInstance[]): Promise<void> => {
+    await store.set({ widgets: next })
+  }
+
+  const addWidgetOfType = async (type: (typeof WIDGET_TYPES)[number]): Promise<void> => {
+    if (settings === undefined) return
+    if (settings.widgets.length >= WIDGET_LIMIT) return
+    const instance = newWidget(type, settings.widgets, { width: window.innerWidth, height: window.innerHeight })
+    await patchWidgets([...settings.widgets, instance])
+  }
+
+  const changeWidget = async (id: string, mutate: (widget: WidgetInstance) => WidgetInstance): Promise<void> => {
+    if (settings === undefined) return
+    await patchWidgets(settings.widgets.map((widget) => (widget.id === id ? mutate(widget) : widget)))
+  }
+
   if (settings === undefined) {
     return (
       <div className={styles.section}>
@@ -354,6 +380,152 @@ export function BongoCatSection(props: BongoCatSectionProps) {
             disabled={!writable} onClick={() => void resetCounter()}>
             {t('counterReset')}
           </button>
+        </div>
+      </div>
+
+      {/* ── desktop widgets ────────────────────────────────────── */}
+      <div className={styles.group}>
+        <div className={styles['group-title']}>{t('widgetSection')}</div>
+        <div className={styles.note}>{t('widgetHint')}</div>
+
+        {settings.widgets.length === 0 && <div className={styles.note}>{t('widgetEmpty')}</div>}
+
+        {settings.widgets.map((widget) => {
+          const definition = WIDGET_DEFINITIONS.find((entry) => entry.type === widget.type)
+          return (
+            <div key={widget.id} className={styles['widget-card']} data-widget={widget.id}>
+              <div className={styles.row}>
+                <label className={styles.check}>
+                  <input type='checkbox' checked={widget.enabled}
+                    onChange={(event) => void changeWidget(widget.id, (current) => (
+                      { ...current, enabled: event.target.checked } as WidgetInstance))} />
+                  <span>{definition === undefined ? widget.type : t(definition.labelKey)}</span>
+                </label>
+                <button type='button' className={`${styles.btn} ${styles['btn-danger']}`}
+                  onClick={() => void patchWidgets(withoutWidget(settings.widgets, widget.id))}>
+                  {t('widgetRemove')}
+                </button>
+              </div>
+
+              {definition !== undefined && <div className={styles.note}>{t(definition.descriptionKey)}</div>}
+
+              <div className={styles.row}>
+                <label className={styles.label}>{t('widgetSize')}</label>
+                <select className={styles.select} value={widget.size}
+                  onChange={(event) => void changeWidget(widget.id, (current) => (
+                    { ...current, size: event.target.value as WidgetInstance['size'] } as WidgetInstance))}>
+                  <option value='sm'>{t('widgetSizeSm')}</option>
+                  <option value='md'>{t('widgetSizeMd')}</option>
+                </select>
+                <label className={styles.label}>{t('widgetOpacity')}</label>
+                <input className={styles.range} type='range' min='0.4' max='1' step='0.05'
+                  value={widget.opacity}
+                  onChange={(event) => void changeWidget(widget.id, (current) => (
+                    { ...current, opacity: Number(event.target.value) } as WidgetInstance))} />
+                <span className={styles.value}>{Math.round(widget.opacity * 100)}%</span>
+              </div>
+
+              {widget.type === 'clock' && (
+                <div className={styles.row}>
+                  <label className={styles.check}>
+                    <input type='checkbox' checked={widget.config.hour12}
+                      onChange={(event) => void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, hour12: event.target.checked }
+                      } as WidgetInstance))} />
+                    <span>{t('widgetHour12')}</span>
+                  </label>
+                  <label className={styles.check}>
+                    <input type='checkbox' checked={widget.config.seconds}
+                      onChange={(event) => void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, seconds: event.target.checked }
+                      } as WidgetInstance))} />
+                    <span>{t('widgetSeconds')}</span>
+                  </label>
+                  <label className={styles.check}>
+                    <input type='checkbox' checked={widget.config.showDate}
+                      onChange={(event) => void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, showDate: event.target.checked }
+                      } as WidgetInstance))} />
+                    <span>{t('widgetShowDate')}</span>
+                  </label>
+                </div>
+              )}
+
+              {widget.type === 'counter' && (
+                <div className={styles.row}>
+                  <label className={styles.label}>{t('widgetSource')}</label>
+                  <select className={styles.select} value={widget.config.source}
+                    onChange={(event) => void changeWidget(widget.id, (current) => ({
+                      ...current,
+                      config: { ...current.config, source: event.target.value as 'total' | 'session' }
+                    } as WidgetInstance))}>
+                    <option value='total'>{t('widgetCounterTotal')}</option>
+                    <option value='session'>{t('widgetCounterSession')}</option>
+                  </select>
+                </div>
+              )}
+
+              {widget.type === 'focus' && (
+                <div className={styles.row}>
+                  <label className={styles.label}>{t('widgetMinutes')}</label>
+                  <input className={styles.select} type='number' min='1' max='120' step='1'
+                    value={widget.config.minutes}
+                    onChange={(event) => {
+                      const minutes = Math.min(120, Math.max(1, Math.round(Number(event.target.value) || 1)))
+                      void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, minutes }
+                      } as WidgetInstance))
+                    }} />
+                  <label className={styles.check}>
+                    <input type='checkbox' checked={widget.config.chime}
+                      onChange={(event) => void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, chime: event.target.checked }
+                      } as WidgetInstance))} />
+                    <span>{t('widgetChime')}</span>
+                  </label>
+                </div>
+              )}
+
+              {widget.type === 'steam' && (
+                <div className={styles.row}>
+                  <label className={styles.label}>{t('widgetLimit')}</label>
+                  <input className={styles.select} type='number' min='1' max='8' step='1'
+                    value={widget.config.limit}
+                    onChange={(event) => {
+                      const limit = Math.min(8, Math.max(1, Math.round(Number(event.target.value) || 1)))
+                      void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, limit }
+                      } as WidgetInstance))
+                    }} />
+                  <label className={styles.check}>
+                    <input type='checkbox' checked={widget.config.showPlaytime}
+                      onChange={(event) => void changeWidget(widget.id, (current) => ({
+                        ...current,
+                        config: { ...current.config, showPlaytime: event.target.checked }
+                      } as WidgetInstance))} />
+                    <span>{t('widgetShowPlaytime')}</span>
+                  </label>
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        <div className={styles.note}>{t('widgetAdd')}</div>
+        <div className={styles.row}>
+          {WIDGET_DEFINITIONS.map((definition) => (
+            <button key={definition.type} type='button' className={styles.btn}
+              disabled={!writable || settings.widgets.length >= WIDGET_LIMIT}
+              onClick={() => void addWidgetOfType(definition.type)}>
+              + {t(definition.labelKey)}
+            </button>
+          ))}
         </div>
       </div>
 
