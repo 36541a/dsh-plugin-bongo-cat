@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
 import subprocess
@@ -64,19 +63,13 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
-# Right-tap press. CatRightPunch is only the impact effect (arc + dashes) —
-# the game rotates the paw NODE at runtime, so no sprite holds the "paw down"
-# pose. Produce it here: swing the paw slightly and press it straight down
-# beside the face (the reference is the game's own counter shot), keeping the
-# wrist in the body's overlap so nothing detaches, and put the impact dashes
-# to the paw's right. Pivot is a fraction of the paw sprite so every skin
-# swings the same way.
-PAW_SWING_DEG = -30.0
-PAW_PRESS = (4, 14)             # extra down-right press after the swing (unscaled px)
-DASH_FROM_PAW = (46, 2)         # dash centroid, unscaled px right of the paw centre
-# Connected components smaller than this are the impact dashes; anything
-# larger is the swoosh, which only makes sense against a drum.
-DASH_MAX_AREA = 400
+# Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
+# visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
+# (the matching drum sprite is the other half, absent from this cat-only
+# composition); CatHitRight then waits _hitDuration (0.1 s in the shipped
+# scene) and ShowRightPunch(false) restores <Skin>Right. Nothing rotates or
+# moves at runtime, so the authentic right-tap frame is simply the idle body
+# plus <Skin>RightPunch at the paw's own origin — no synthesized swing.
 
 
 # ----------------------------------------------------------------------
@@ -171,99 +164,6 @@ def list_skins(assets: Path) -> list[str]:
     return sorted(names)
 
 
-def _components(img: Image.Image, min_alpha: int = 40):
-    """Yield 8-connected opaque components as lists of (x, y)."""
-    w, h = img.size
-    px = img.load()
-    seen = bytearray(w * h)
-    for y in range(h):
-        for x in range(w):
-            index = y * w + x
-            if seen[index]:
-                continue
-            if px[x, y][3] < min_alpha:
-                seen[index] = 1
-                continue
-            stack = [(x, y)]
-            seen[index] = 1
-            comp = []
-            while stack:
-                cx, cy = stack.pop()
-                comp.append((cx, cy))
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        nx, ny = cx + dx, cy + dy
-                        if 0 <= nx < w and 0 <= ny < h:
-                            j = ny * w + nx
-                            if not seen[j] and px[nx, ny][3] >= min_alpha:
-                                seen[j] = 1
-                                stack.append((nx, ny))
-            yield comp
-
-
-def impact_dashes(img: Image.Image) -> Image.Image:
-    """Keep the small impact strokes of a punch sprite and drop the swoosh.
-
-    The big arc in <Skin>RightPunch traces the paw's path against a drum.
-    Without the drum it reads as a stray outline, while the three dashes
-    still read as an impact mark next to the paw.
-    """
-    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    src, dst = img.load(), out.load()
-    for comp in _components(img):
-        if len(comp) <= DASH_MAX_AREA:
-            for x, y in comp:
-                dst[x, y] = src[x, y]
-    return out
-
-
-def alpha_centroid(img: Image.Image) -> tuple[float, float]:
-    """Alpha-weighted centroid of a sprite, in its own pixels."""
-    total = 0.0
-    sx = sy = 0.0
-    for y in range(img.height):
-        for x in range(img.width):
-            a = img.getpixel((x, y))[3]
-            total += a
-            sx += a * x
-            sy += a * y
-    if total == 0:
-        return (img.width / 2, img.height / 2)
-    return (sx / total, sy / total)
-
-
-def rotate_about(img: Image.Image, angle_deg: float, pivot: tuple[float, float]):
-    """Rotate img visually counter-clockwise around pivot (img pixels).
-
-    Uses an explicit affine map instead of Image.rotate(expand=True): where
-    the pivot lands in the output is part of the contract here, and PIL's
-    expand offset conventions are not. Returns (image, forward) where
-    forward(point) maps an input pixel to its output position.
-    """
-    th = math.radians(angle_deg)
-    w, h = img.size
-    size = int(math.ceil(math.hypot(w, h))) + 4
-    origin = (size / 2, size / 2)
-    center = (w / 2, h / 2)
-    cos_t, sin_t = math.cos(th), math.sin(th)
-    # output q -> input p: p = center + R^-1 (q - origin),
-    # R = [[cos, sin], [-sin, cos]] (counter-clockwise in y-down coords).
-    coeffs = (
-        cos_t, -sin_t, center[0] - (cos_t * origin[0] - sin_t * origin[1]),
-        sin_t, cos_t, center[1] - (sin_t * origin[0] + cos_t * origin[1]),
-    )
-    out = img.transform((size, size), Image.AFFINE, coeffs, resample=Image.BICUBIC)
-
-    def forward(point: tuple[float, float]) -> tuple[float, float]:
-        rel = (point[0] - center[0], point[1] - center[1])
-        return (
-            origin[0] + cos_t * rel[0] + sin_t * rel[1],
-            origin[1] - sin_t * rel[0] + cos_t * rel[1],
-        )
-
-    return out, forward
-
-
 def compose(
     sprites: dict[str, tuple[Image.Image, tuple[float, float, float, float]]],
     skin: str,
@@ -271,51 +171,16 @@ def compose(
     with_drums: bool = False,
 ) -> dict[str, Image.Image]:
     parts = dict(sprites)
-    if not with_drums:
-        # Only the small strokes; the arc needs a drum behind it to make sense.
-        parts["Dashes"] = (impact_dashes(sprites["CatRightPunch"][0]), sprites["CatRightPunch"][1])
 
     def art(key: str):
         img, (rx, ry, rw, rh) = parts[key]
         img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
         origin = ORIGIN_BOX.get(key, ORIGIN["paw"])
-        if key in ("CatRight", "CatRightPunch", "Dashes"):
+        if key in ("CatRight", "CatRightPunch"):
             origin = ORIGIN["paw_drum"] if with_drums else ORIGIN["paw"]
         x = origin[0] + rx
         y = origin[1] + (256 - ry - rh)
         return img, x * scale, y * scale
-
-    def swing(canvas: Image.Image) -> None:
-        """Right hit: press the paw down beside the face, dashes at its right.
-
-        The game swings the paw NODE at runtime — <Skin>RightPunch is only the
-        impact effect — so the down pose has to be produced here. A mild swing
-        plus a straight downward press keeps the paw in place (matching the
-        game's own counter shot), with the wrist still inside the body's
-        overlap so nothing detaches.
-        """
-        paw_img, (rx, ry, rw, rh) = parts["CatRight"]
-        big = paw_img.resize((paw_img.width * scale, paw_img.height * scale), Image.LANCZOS)
-        base = (ORIGIN["paw"][0] + rx, ORIGIN["paw"][1] + (256 - ry - rh))
-        pivot = (rw * 0.45 * scale, rh * 0.92 * scale)
-        swung, forward = rotate_about(big, PAW_SWING_DEG, pivot)
-        where = forward(pivot)
-        target = (
-            (base[0] + rw * 0.45 + PAW_PRESS[0]) * scale,
-            (base[1] + rh * 0.92 + PAW_PRESS[1]) * scale,
-        )
-        canvas.alpha_composite(swung, (int(round(target[0] - where[0])), int(round(target[1] - where[1]))))
-        # dashes sit to the paw's right, at pad height
-        center_out = forward((rw * 0.5 * scale, rh * 0.5 * scale))
-        paw_center = (target[0] - where[0] + center_out[0], target[1] - where[1] + center_out[1])
-        dash_img, _ = parts["Dashes"]
-        dash_big = dash_img.resize((dash_img.width * scale, dash_img.height * scale), Image.LANCZOS)
-        cx, cy = alpha_centroid(dash_img)
-        dash_pos = (
-            paw_center[0] + DASH_FROM_PAW[0] * scale - cx * scale,
-            paw_center[1] + DASH_FROM_PAW[1] * scale - cy * scale,
-        )
-        canvas.alpha_composite(dash_big, (int(round(dash_pos[0])), int(round(dash_pos[1]))))
 
     def bbox(img):
         return img.getbbox() or (0, 0, img.width, img.height)
@@ -345,14 +210,10 @@ def compose(
         img, x, y = art(cat_key)
         canvas.alpha_composite(img, (int(x), int(y)))
 
-        if with_drums:
-            img, x, y = art("CatRightPunch" if right_punch else "CatRight")
-            canvas.alpha_composite(img, (int(x), int(y)))
-        elif right_punch:
-            swing(canvas)
-        else:
-            img, x, y = art("CatRight")
-            canvas.alpha_composite(img, (int(x), int(y)))
+        # Right paw: idle <Skin>Right, or the game's own <Skin>RightPunch pose
+        # while the hit lasts — both positioned at the paw image's origin.
+        img, x, y = art("CatRightPunch" if right_punch else "CatRight")
+        canvas.alpha_composite(img, (int(x), int(y)))
         return canvas
 
     frames = {
@@ -361,7 +222,7 @@ def compose(
         "tap-right": frame("CatLeft", True),
     }
     if with_drums:
-        return frames
+        return frames, (0, 0, w, h)
     # Cat-only frames: crop to content (+ a small margin) so the overlay is tight.
     cropped: dict[str, Image.Image] = {}
     boxes = [img.getbbox() or (0, 0, img.width, img.height) for img in frames.values()]
@@ -373,7 +234,7 @@ def compose(
     box = (max(0, left - pad), max(0, top - pad), min(w, right + pad), min(h, bottom + pad))
     for name, img in frames.items():
         cropped[name] = img.crop(box)
-    return cropped
+    return cropped, box
 
 
 # Box origin lookup keyed by the internal keys used by art(). The right-paw
@@ -429,6 +290,216 @@ def export_catalog(assets: Path, out: Path, max_icon: int = 128) -> dict:
     return meta
 
 
+# ----------------------------------------------------------------------
+# cosmetics catalogue (hats / faces / back pieces / props)
+# ----------------------------------------------------------------------
+# The game's own item definitions are ScriptableObject assets whose m_Name is
+# the Steam item's display name ("927 - Symbol Sparkle Emoji"). Every cosmetic
+# is authored on the same 256-box canvas as the cat, so an item is a
+# full-canvas overlay: paint the sprite at ORIGIN["cat"] and crop with the same
+# box the frames use. Slots are not in any local metadata (the game reads the
+# category from the Steam inventory), so they are inferred from the item name.
+COSMETIC_DIR = "cosmetics"
+
+BACK_RE = re.compile(r"(?i)(wings?|cape|tail|backpack|shell|jetpack|parachute|scythe|flag|aura|trail)")
+HAT_RE = re.compile(
+    r"(?i)(hat|cap|cap$|crown|helmet|halo|beret|beanie|beanie|turban|headband|headphone"
+    r"|earmuff|antenna|horns?|tiara|wig|hair|mane|mohawk|hood|ushanka|strawhat|knit"
+    r"|rice hat|cone|pumpkin|santa|wizard|witch|jester|fez|flower|leaf|leaves"
+    r"|feather|antler|visor|ears?$|tent|mushroom|bonnet|bucket)"
+)
+FACE_RE = re.compile(
+    r"(?i)(glasses|shades|goggles?|monocle|blush|moustache|mustache|beard|brow"
+    r"|eye|tears?|sweat|nose|tattoo|scar|blindfold|bandage|makeup|\blips?\b|mouth"
+    r"|mask)"
+)
+RARITY_LEGENDARY = ("gold", "diamond", "platinum", "legend", "mythic", "rainbow",
+                    "void", "zeus", "poseidon", "hades", "dragon", "phoenix",
+                    "crystal", "emperor", "king", "queen")
+RARITY_RARE = ("silver", "ruby", "sapphire", "emerald", "amethyst", "crown",
+               "wings", "unicorn", "santa", "halloween", "christmas", "spirit",
+               "ghost", "angel", "demon", "gem")
+
+
+def classify_cosmetic(name: str) -> tuple[str, str, int]:
+    """Return (slot, layer, rarity) for one item name (heuristic, documented)."""
+    lower = name.lower()
+    if BACK_RE.search(name):
+        slot, layer = "back", "back"
+    elif FACE_RE.search(name):
+        slot, layer = "face", "front"
+    elif HAT_RE.search(name):
+        slot, layer = "hat", "front"
+    else:
+        # Body props, food, costumes, hand-held objects: one "extras" bucket.
+        slot, layer = "accessory", "front"
+    if any(word in lower for word in RARITY_LEGENDARY):
+        rarity = 3
+    elif any(word in lower for word in RARITY_RARE):
+        rarity = 2
+    else:
+        rarity = 1
+    return slot, layer, rarity
+
+
+def slugify(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "item"
+
+
+def load_script_ids(game: Path) -> dict[int, str]:
+    """MonoScript path id → class name (globalgamemanagers.assets)."""
+    path = game / "BongoCat_Data" / "globalgamemanagers.assets"
+    if not path.exists():
+        return {}
+    env = UnityPy.load(str(path))
+    ids: dict[int, str] = {}
+    for obj in env.objects:
+        if obj.type.name != "MonoScript":
+            continue
+        try:
+            ids[obj.path_id] = getattr(obj.read(), "m_Name", "")
+        except Exception:
+            continue
+    return ids
+
+
+def _read_len_string(data: bytes, pos: int) -> tuple[str, int]:
+    length = int.from_bytes(data[pos:pos + 4], "little", signed=True)
+    if not 0 <= length < 2000:
+        raise ValueError("bad serialized string length")
+    return data[pos + 4:pos + 4 + length].decode("utf-8", "ignore"), pos + 4 + length
+
+
+def load_item_names(assets: Path, script_ids: dict[int, str]) -> list[str]:
+    """Display names of the game's local item definitions (Steam items)."""
+    target = {pid for pid, name in script_ids.items() if name == "SteamItemBasic"}
+    env = UnityPy.load(str(assets))
+    names: list[str] = []
+    for obj in env.objects:
+        if obj.type.name != "MonoBehaviour":
+            continue
+        try:
+            data = obj.get_raw_data()
+        except Exception:
+            continue
+        if len(data) < 32:
+            continue
+        script = int.from_bytes(data[20:28], "little", signed=True)
+        if script not in target:
+            continue
+        try:
+            name, _ = _read_len_string(data, 28)
+        except Exception:
+            continue
+        names.append(name)
+    return sorted(set(names))
+
+
+def export_cosmetics(assets: Path, out: Path, box: tuple[int, int, int, int], scale: int) -> dict:
+    """Export every dress-up overlay as PNG + write native/cosmetics/catalog.json."""
+    game = assets.parent.parent
+    script_ids = load_script_ids(game)
+    raw_names = load_item_names(assets, script_ids)
+
+    env = UnityPy.load(str(assets))
+    sprite_objects: dict[str, object] = {}
+    for obj in env.objects:
+        if obj.type.name != "Sprite":
+            continue
+        try:
+            name = getattr(obj.read(), "m_Name", "")
+        except Exception:
+            continue
+        sprite_objects[name] = obj
+
+    cosmetics: list[dict] = []
+    used: set[str] = set()
+    for raw in raw_names:
+        match = re.match(r"^(\d+)\s*-\s*(.+)$", raw)
+        if match is None:
+            continue
+        item_no = int(match.group(1))
+        name = match.group(2).strip()
+        key = name.replace(" ", "")
+        if key not in sprite_objects:
+            continue
+        # A skin is split into <Skin>Left / <Skin>Right; anything else drawn on
+        # the canvas is a dress-up overlay.
+        if f"{key}Left" in sprite_objects:
+            continue
+        slot, layer, rarity = classify_cosmetic(name)
+        base = slugify(name)
+        slug = base
+        suffix = 2
+        while slug in used:
+            slug = f"{base}-{suffix}"
+            suffix += 1
+        used.add(slug)
+        cosmetics.append({
+            "id": slug,
+            "itemId": item_no,
+            "name": name,
+            "slot": slot,
+            "layer": layer,
+            "rarity": rarity,
+            "sprite": key,
+        })
+
+    cosmetic_dir = out / COSMETIC_DIR
+    cosmetic_dir.mkdir(parents=True, exist_ok=True)
+    width, height = CANVAS[0] * scale, CANVAS[1] * scale
+    left, top, right, bottom = box
+    exported = 0
+    for item in cosmetics:
+        sprite = sprite_objects[item["sprite"]].read()
+        image = sprite.image.convert("RGBA")
+        rect = sprite.m_RD.textureRect
+        rx, ry, rw, rh = rect.x, rect.y, rect.width, rect.height
+        image = image.resize((image.width * scale, image.height * scale), Image.LANCZOS)
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        x = (ORIGIN["cat"][0] + rx) * scale
+        y = (ORIGIN["cat"][1] + (256 - ry - rh)) * scale
+        canvas.alpha_composite(image, (int(x), int(y)))
+        # Crop to the overlay's own content and remember where it sits inside
+        # the frame box: the browser positions it from `rect` (stage pixels),
+        # so the files stay small and the alignment stays exact.
+        content_box = canvas.getbbox() or (0, 0, width, height)
+        overlay = canvas.crop(content_box)
+        overlay.save(cosmetic_dir / f"{item['id']}.png")
+        item["rect"] = [
+            content_box[0] - left,
+            content_box[1] - top,
+            content_box[2] - content_box[0],
+            content_box[3] - content_box[1],
+        ]
+
+        # Tile icon: the overlay's own content, padded, at most 96 px.
+        pad = 6 * scale
+        padded = Image.new("RGBA", (overlay.width + pad * 2, overlay.height + pad * 2), (0, 0, 0, 0))
+        padded.alpha_composite(overlay, (pad, pad))
+        icon_scale = min(1.0, 96 / max(padded.width, padded.height))
+        if icon_scale < 1.0:
+            padded = padded.resize((max(1, int(padded.width * icon_scale)), max(1, int(padded.height * icon_scale))), Image.LANCZOS)
+        padded.save(cosmetic_dir / f"{item['id']}.icon.png")
+        exported += 1
+
+    stamp = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+    catalog = {
+        "version": 1,
+        "stamp": stamp,
+        "scale": scale,
+        "size": [right - left, bottom - top],
+        "items": [
+            {k: item[k] for k in ("id", "name", "slot", "layer", "rarity", "rect")}
+            for item in cosmetics
+        ],
+    }
+    (cosmetic_dir / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"ok": True, "cosmetics": exported, "size": catalog["size"]}, ensure_ascii=False))
+    return catalog
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract original Bongo Cat frames for dsh-plugin-bongo-cat")
     parser.add_argument("--out", help="output directory (plugin native storage)")
@@ -480,7 +551,7 @@ def main() -> None:
         }
     sprites = {k: raw[v] for k, v in keymap.items()}
 
-    frames = compose(sprites, skin, max(1, min(6, args.scale)), with_drums=args.with_drums)
+    frames, box = compose(sprites, skin, max(1, min(6, args.scale)), with_drums=args.with_drums)
 
     # sanity: the cat must occupy the middle band of the frame
     idle = frames["idle"]
@@ -494,6 +565,10 @@ def main() -> None:
     for name, image in frames.items():
         image.save(out / f"{name}.png")
 
+    # Dress-up overlays ride along: same canvas, same crop box as the frames,
+    # so the browser can paint them on the stage without extra geometry.
+    cosmetic_catalog = export_cosmetics(assets, out, box, max(1, min(6, args.scale)))
+
     meta = {
         "source": "steam-bongo-cat",
         "appId": APP_ID,
@@ -502,6 +577,10 @@ def main() -> None:
         "drums": bool(args.with_drums),
         "frames": {name: f"{name}.png" for name in frames},
         "size": list(frames["idle"].size),
+        "cosmetics": {
+            "count": len(cosmetic_catalog["items"]),
+            "stamp": cosmetic_catalog["stamp"],
+        },
         "gameDir": str(game),
         "extractedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
     }
@@ -511,3 +590,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
