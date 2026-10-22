@@ -30,6 +30,7 @@
  * hand-write a parallel list anywhere else.
  */
 
+import { type WardrobeState, WARDROBE_DEFAULTS, sanitizeWardrobe } from './cosmetics'
 import { type WidgetInstance, sanitizeWidgets } from './widgets'
 
 /** Anchor corner of the floating cat. */
@@ -37,11 +38,11 @@ export const POSITIONS = ['bottom-right', 'bottom-left', 'top-left', 'top-right'
 export type BongoCatPosition = (typeof POSITIONS)[number]
 
 /** Field kinds the contract knows how to describe and validate. */
-export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position' | 'enum' | 'widgets'
+export type FieldKind = 'boolean' | 'string' | 'natural' | 'number' | 'position' | 'enum' | 'widgets' | 'cosmetics'
 
 export interface FieldMeta {
   kind: FieldKind
-  default: boolean | string | number | readonly WidgetInstance[]
+  default: boolean | string | number | readonly WidgetInstance[] | Readonly<WardrobeState>
   /** inclusive lower bound (natural / number) */
   min?: number
   /** inclusive upper bound (natural / number) */
@@ -92,7 +93,13 @@ export const SETTINGS_FIELDS = {
    * independent instance with its own seat, size and config. Empty by default:
    * the cat alone is the plugin's original behaviour, widgets are opt-in.
    */
-  widgets: { kind: 'widgets', default: [] }
+  widgets: { kind: 'widgets', default: [] },
+  /**
+   * The cat's wardrobe: worn stickers per slot, fur colour, drop ledger and
+   * the grid filter. Default is the untouched cat plus a three-piece starter
+   * kit, so the feature can be tried without grinding for drops.
+   */
+  wardrobe: { kind: 'cosmetics', default: WARDROBE_DEFAULTS }
 } as const satisfies Record<string, FieldMeta>
 
 export type SettingsKey = keyof typeof SETTINGS_FIELDS
@@ -107,16 +114,22 @@ type DefaultOf<M extends FieldMeta> =
   M extends { kind: 'boolean' } ? boolean
     : M extends { kind: 'position' } ? BongoCatPosition
       : M extends { kind: 'widgets' } ? WidgetInstance[]
-        : M extends { kind: 'string' | 'enum' } ? string
-          : number
+        : M extends { kind: 'cosmetics' } ? WardrobeState
+          : M extends { kind: 'string' | 'enum' } ? string
+            : number
 export type BongoCatSettings = { [K in SettingsKey]: DefaultOf<(typeof SETTINGS_FIELDS)[K]> }
 
-/** Defaults object, derived from the contract. */
+/**
+ * Defaults object, derived from the contract. Structured defaults are cloned
+ * per call site so no consumer can mutate the contract (a settings document
+ * handed to React must never alias the module-level default).
+ */
 export const SETTINGS_DEFAULTS: BongoCatSettings = Object.fromEntries(
   Object.entries(SETTINGS_FIELDS).map(([key, meta]) => [
     key,
-    // Arrays are cloned per call site so no consumer can mutate the contract.
-    Array.isArray(meta.default) ? [...meta.default] : meta.default
+    typeof meta.default === 'object' && meta.default !== null
+      ? JSON.parse(JSON.stringify(meta.default))
+      : meta.default
   ])
 ) as BongoCatSettings
 
@@ -194,6 +207,12 @@ export function sanitizeSettingsPatch(patch: unknown): SanitizeResult {
       }
       case 'widgets': {
         const result = sanitizeWidgets(value)
+        if (!result.ok) return fail(`${key}: ${result.error}`)
+        clean[key] = result.value
+        break
+      }
+      case 'cosmetics': {
+        const result = sanitizeWardrobe(value)
         if (!result.ok) return fail(`${key}: ${result.error}`)
         clean[key] = result.value
         break

@@ -51,7 +51,16 @@ const serverState = {
   widgets: [
     { id: 'clock', type: 'clock', enabled: true, x: 120, y: 120, size: 'sm', opacity: 1, config: { hour12: false, seconds: true, showDate: true } },
     { id: 'steam', type: 'steam', enabled: true, x: 120, y: 280, size: 'md', opacity: 1, config: { limit: 3, showPlaytime: true } }
-  ]
+  ],
+  // A hat, an accessory and a non-default fur: enough to prove the overlay
+  // projects a wardrobe, without depending on the drop ledger.
+  wardrobe: {
+    equipped: { hat: 'beanie', face: null, accessory: 'scarf' },
+    fur: 'ginger',
+    owned: { beanie: 1, scarf: 1, blush: 1 },
+    claimed: 0,
+    filter: 'all'
+  }
 }
 
 const connection = {
@@ -276,6 +285,35 @@ check('size change resizes stage', el?.firstElementChild?.style.width === '300px
 await payload.store.set({ showCounter: false })
 await sleep(10)
 check('counter badge hides', el?.querySelector('[data-role="bongo-cat-counter"]')?.style.display === 'none')
+
+console.log('— wardrobe overlay —')
+const decor = el?.querySelector('[data-role="bongo-cat-decor"]')
+const nativeLayer = el?.querySelector('[data-role="bongo-cat-native"]')
+check('decor layer mounts inside the cat stage', decor !== null && decor.parentElement === nativeLayer?.parentElement)
+check('the worn hat is drawn', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'beanie')
+check('the worn accessory is drawn', decor?.querySelector('[data-slot="accessory"]')?.getAttribute('data-item') === 'scarf')
+check('an empty slot draws nothing', decor?.querySelector('[data-slot="face"]') === null)
+check('sticker geometry comes from the catalogue', /left:50%/.test(decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? ''), decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? 'none')
+check('fur colour filters the artwork', (nativeLayer?.style.filter ?? '').includes('sepia'), nativeLayer?.style.filter ?? 'none')
+check('the counter badge is not tinted', (el?.querySelector('[data-role="bongo-cat-counter"]')?.style.filter ?? '') === '')
+
+// Changing the wardrobe re-renders the layer: new hat, accessory taken off.
+await payload.store.set({
+  wardrobe: {
+    equipped: { hat: 'crown', face: null, accessory: 'wings' },
+    fur: 'original',
+    owned: { beanie: 1, scarf: 1, blush: 1, crown: 1, wings: 1 },
+    claimed: 0,
+    filter: 'all'
+  }
+})
+await sleep(20)
+check('a wardrobe change re-renders the stickers', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'crown')
+// Wings declare `layer: 'back'`; they must render under the artwork, and the
+// front layer must not duplicate them.
+const decorBack = el?.querySelector('[data-role="bongo-cat-decor-back"]')
+check('back-layer items render behind the cat', decorBack?.querySelector('[data-item="wings"]') !== null && decor?.querySelector('[data-item="wings"]') === null)
+check('going back to the original fur clears the filter', (nativeLayer?.style.filter ?? '') === '', nativeLayer?.style.filter ?? 'none')
 
 console.log('— enable toggle —')
 await payload.store.set({ enabled: false })

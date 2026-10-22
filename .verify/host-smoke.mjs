@@ -221,6 +221,54 @@ const tooMany = Array.from({ length: 13 }, (_, index) => ({ ...clockInstance, id
 await rejected('more than twelve widgets are rejected', tooMany)
 check('rejected widget patches leave the list untouched', (await rpc('config/get')).value.widgets.length === 2)
 
+console.log('— wardrobe contract —')
+
+r = await rpc('config/get')
+check('wardrobe starts as the starter kit',
+  r.ok === true && r.value.wardrobe.equipped.hat === null && r.value.wardrobe.owned.beanie === 1 && r.value.wardrobe.fur === 'original',
+  JSON.stringify(r.value?.wardrobe).slice(0, 180))
+
+const wardrobePatch = {
+  equipped: { hat: 'beanie', face: null, accessory: 'scarf' },
+  fur: 'ginger',
+  owned: { beanie: 2, scarf: 1, crown: 1 },
+  claimed: 4,
+  filter: 'owned'
+}
+
+r = await rpc('config/set', { patch: { wardrobe: wardrobePatch } })
+check('config/set accepts a wardrobe',
+  r.ok === true && r.value.wardrobe.equipped.hat === 'beanie' && r.value.wardrobe.fur === 'ginger',
+  JSON.stringify(r).slice(0, 200))
+r = await rpc('config/get')
+check('wardrobe round-trips through the store',
+  r.value?.wardrobe?.owned?.beanie === 2 && r.value?.wardrobe?.filter === 'owned',
+  JSON.stringify(r.value?.wardrobe).slice(0, 160))
+
+// Forward compatibility: a document from a newer build still loads. Unknown
+// ids leave `owned`, an item that is not owned cannot be worn, and unknown
+// fur/filter values fall back instead of blocking the whole patch.
+r = await rpc('config/set', { patch: { wardrobe: {
+  ...wardrobePatch,
+  owned: { ...wardrobePatch.owned, 'weather-vane': 3 },
+  equipped: { hat: 'crown', face: 'glasses', accessory: null },
+  fur: 'neon',
+  filter: 'wild'
+} } })
+check('unknown item ids are dropped from owned',
+  r.ok === true && r.value.wardrobe.owned['weather-vane'] === undefined && Object.keys(r.value.wardrobe.owned).length === 3,
+  JSON.stringify(r.value?.wardrobe?.owned))
+check('an item you do not own cannot be worn', r.ok === true && r.value.wardrobe.equipped.face === null, String(r.value?.wardrobe?.equipped?.face))
+check('a known item stays worn', r.ok === true && r.value.wardrobe.equipped.hat === 'crown', String(r.value?.wardrobe?.equipped?.hat))
+check('an unknown fur falls back to the original artwork', r.ok === true && r.value.wardrobe.fur === 'original', String(r.value?.wardrobe?.fur))
+check('an unknown filter falls back to all', r.ok === true && r.value.wardrobe.filter === 'all', String(r.value?.wardrobe?.filter))
+
+r = await rpc('config/set', { patch: { wardrobe: { ...wardrobePatch, owned: { beanie: 5000 } } } })
+check('owned counts clamp to 999', r.ok === true && r.value.wardrobe.owned.beanie === 999, String(r.value?.wardrobe?.owned?.beanie))
+
+r = await rpc('config/set', { patch: { wardrobe: 'beanie' } })
+check('a non-object wardrobe is rejected', r.ok === false && r.error?.code === 'bad-request', JSON.stringify(r).slice(0, 160))
+
 console.log('— steam library —')
 r = await rpc('steam/library')
 check('steam/library answers', r.ok === true && Array.isArray(r.value?.games), JSON.stringify(r).slice(0, 160))

@@ -12,6 +12,9 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+import { type DropGain, claimDrops, itemById, pendingDrops } from '../shared/cosmetics'
+import { DECOR_BACK_ROLE, DECOR_ROLE, artworkFilter, cosmeticMarkup } from './cosmetics/render'
+import { updateWardrobe } from './cosmetics/writer'
 import { BongoSound } from './sound'
 import { BongoCatKey, BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
 import { BongoCatStore } from './store'
@@ -109,6 +112,19 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   }
   nativeWrap.dataset.active = 'idle'
 
+  // Worn stickers. Two layers: `back` items (wings) paint under the
+  // transparent artwork so only their tips show past the silhouette; `front`
+  // items (hats, faces, scarves) sit on top.
+  const decorBack = document.createElement('div')
+  decorBack.className = 'bc-decor'
+  decorBack.dataset.role = DECOR_BACK_ROLE
+  decorBack.setAttribute('aria-hidden', 'true')
+
+  const decor = document.createElement('div')
+  decor.className = 'bc-decor'
+  decor.dataset.role = DECOR_ROLE
+  decor.setAttribute('aria-hidden', 'true')
+
   // shown when no original artwork is available
   const empty = document.createElement('div')
   empty.className = styles['bc-empty']
@@ -126,7 +142,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   count.textContent = '0'
   badge.append(drum, count)
 
-  stage.append(sprite, nativeWrap, empty, badge)
+  stage.append(decorBack, sprite, nativeWrap, decor, empty, badge)
   root.append(stage)
   document.body.append(root)
 
@@ -204,6 +220,75 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     root.style.setProperty('--bc-speed', String(Math.min(2.5, Math.max(0.5, next.speed))))
   }
 
+  /**
+   * Project the wardrobe onto the cat: stickers inside the stage, fur colour
+   * as a filter on the artwork (never on the root, or the badge and stickers
+   * would be tinted too).
+   *
+   * The markup is rebuilt only when the equipped set or the fur changes — the
+   * drop that triggers it also bumps `owned`, and rebuilding the layer on
+   * every owned-count change would restart the sticker entrance animation.
+   */
+  let cosmeticKey = ''
+  const applyCosmetics = (next: BongoCatSettings): void => {
+    const wardrobe = next.wardrobe
+    const key = `${wardrobe.fur}|${wardrobe.equipped.hat ?? ''}|${wardrobe.equipped.face ?? ''}|${wardrobe.equipped.accessory ?? ''}`
+    if (key !== cosmeticKey) {
+      cosmeticKey = key
+      decor.innerHTML = cosmeticMarkup(wardrobe, 'front')
+      decorBack.innerHTML = cosmeticMarkup(wardrobe, 'back')
+    }
+    const filter = artworkFilter(wardrobe)
+    if (nativeWrap.style.filter !== filter) {
+      nativeWrap.style.filter = filter
+      sprite.style.filter = filter
+    }
+  }
+
+  /** Announce a drop next to the cat (the panel shows the full ledger). */
+  const showDropToast = (id: string, isNew: boolean): void => {
+    const item = itemById(id)
+    if (item === undefined) return
+    const toast = document.createElement('div')
+    toast.className = `${styles['bc-toast']} bc-drop`
+    toast.dataset.role = 'bongo-cat-drop'
+    const art = document.createElement('span')
+    art.className = 'bc-drop-art'
+    art.innerHTML = `<svg viewBox="0 0 100 100" aria-hidden="true">${item.art}</svg>`
+    const label = document.createElement('span')
+    label.textContent = t ? t(isNew ? 'wardrobeDropNew' : 'wardrobeDropDup') : 'New sticker!'
+    toast.append(art, label)
+    root.append(toast)
+    window.setTimeout(() => toast.remove(), 4200)
+  }
+
+  /**
+   * Roll whatever the tap ledger has earned (one per call, so a profile with a
+   * long history does not unload ten toasts at once).
+   *
+   * `counter` is the host's persisted total from the last load and
+   * `sessionTaps` is this page's contribution — the same arithmetic the badge
+   * uses. Reading the live snapshot instead of the painted one keeps a
+   * concurrent panel edit (filter, fur) from being overwritten.
+   */
+  const maybeDrop = (): void => {
+    const snapshot = store.getSnapshot()
+    if (snapshot.status !== 'ready' || snapshot.value === undefined) return
+    // Cheap gate: this runs on every keystroke and most taps owe nothing.
+    if (pendingDrops(snapshot.value.wardrobe, snapshot.value.counter + sessionTaps, 1) === 0) return
+    // The claim goes through the same serialised writer as the panel, so an
+    // equip from the click that earned this drop is not overwritten by it.
+    const captured: { gain: DropGain | null } = { gain: null }
+    void updateWardrobe(store, (current) => {
+      const counter = store.getSnapshot().value?.counter ?? 0
+      const result = claimDrops(current, counter + sessionTaps, 1)
+      captured.gain = result.gained[0] ?? null
+      return result.state
+    }).then(() => {
+      if (captured.gain !== null) showDropToast(captured.gain.id, captured.gain.isNew)
+    }).catch(() => undefined)
+  }
+
   // ── original artwork plumbing ─────────────────────────────────
   const applyNativeSources = (): void => {
     if (!nativeStatus.available) return
@@ -223,6 +308,10 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     root.classList.toggle(cls('bc-empty-mode'), !custom && !native)
     nativeWrap.style.display = native ? '' : 'none'
     empty.style.display = !custom && !native ? '' : 'none'
+    // Nothing to dress when there is no artwork at all.
+    const dressed = custom || native
+    decor.style.display = dressed ? '' : 'none'
+    decorBack.style.display = dressed ? '' : 'none'
     if (native) applyNativeSources()
   }
 
@@ -252,6 +341,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     applyPosition(next)
     applyBadge(next)
     applySound(next)
+    applyCosmetics(next)
     applyMode(next)
     root.style.display = next.enabled ? '' : 'none'
     maybeShowHint(next)
@@ -308,6 +398,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     sessionTaps += 1
     applyBadge(settings)
     stats.add(1)
+    maybeDrop()
   }
 
   /**

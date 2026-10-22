@@ -38,6 +38,12 @@ export type BongoCatKey =
   | 'widgetMinutes' | 'widgetChime'
   | 'widgetSteam' | 'widgetSteamDesc' | 'widgetSteamRefresh' | 'widgetSteamLoading' | 'widgetSteamEmpty'
   | 'widgetSteamFailed' | 'widgetSteamLocalOnly' | 'widgetSteamLaunchFailed' | 'widgetLimit' | 'widgetShowPlaytime'
+  // wardrobe
+  | 'wardrobeSection' | 'wardrobeHint' | 'wardrobeHat' | 'wardrobeFace' | 'wardrobeAccessory' | 'wardrobeFur'
+  | 'wardrobeFilter' | 'wardrobeFilterAll' | 'wardrobeFilterOwned' | 'wardrobeFilterEquipped'
+  | 'wardrobeRandom' | 'wardrobeClaim' | 'wardrobeUnequip' | 'wardrobeEmpty' | 'wardrobeLocked'
+  | 'wardrobeCollected' | 'wardrobeNextDrop' | 'wardrobeReady' | 'wardrobeClaimed' | 'wardrobeNewOnes'
+  | 'wardrobeNoDrop' | 'wardrobeDropNew' | 'wardrobeDropDup'
 
 /** Status of the extracted original (Steam) artwork. */
 export interface NativeStatus {

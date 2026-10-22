@@ -388,6 +388,27 @@ apply()
 
 **样式**：组件用字面类名（`bc-widget*`）而不是 CSS Modules，因为这些类只在"一个组件文件 ↔ 一张样式表"之间流通，过一遍哈希表没有收益。为此构建里加了一条全局 `.css` 通道（`globalCssPlugin`），CSS Modules 仍是 React 组件的规则。
 
+### 5.12.2 装扮系统（v0.9.0）
+
+**数据在前，画面在后。** `src/shared/cosmetics.ts` 是唯一真相：道具表（id / 槽位 / 稀有度 / 锚点 / SVG）、毛色表、清洗规则、掉落算法。host 用 `sanitizeWardrobe` 校验 `config/set`，浏览器用同一份表渲染，因此“哪个 id 合法、属于哪个槽位、缺字段怎么补”不会两边跑偏。
+
+**三层职责**
+
+| 文件 | 职责 | 不碰的事 |
+|---|---|---|
+| `shared/cosmetics.ts` | 道具/毛色/掉落/清洗/穿脱工具 | DOM、React、RPC |
+| `client/cosmetics/render.ts` | wardrobe → 贴纸层 markup + 毛色滤镜 | 面板状态、写回 |
+| `client/cosmetics/WardrobePanel.tsx` | 面板：页签、网格、色板、工具条 | 掉落结算（只调用纯函数） |
+| `client/cosmetics/writer.ts` | 串行化读-改-写 | 业务规则 |
+
+**两个渲染层。** 贴纸挂在猫的 `stage` 里（跟随拖动/缩放/换角），分 `front` / `back` 两层：`back` 在透明 PNG 之前，只有轮廓外的部分可见（翅膀）；`front` 在其上（帽子、表情、围巾）。贴纸几何是数据（`x`/`y`/`w` 百分比），加一件道具不需要动样式表。毛色是 `filter`，只作用在美术元素上——绝不能作用在 root，否则计数徽章和贴纸会被一起染色。
+
+**写回为什么要串行。** 点击道具本身也是一次 pointerdown，猫会把它当作敲击并可能触发掉落；两个写手都在改同一个 `wardrobe` 字段，朴素写法下后者会把前者的装备覆盖掉（实测复现过）。`writer.ts` 用 per-store promise 链，在**上一次写入落地之后**才读取最新快照再计算，保证读-改-写成对；掉落用“第 N 次掉落”播种，重复执行结果一致，即使一次写回丢失也能在下一次敲击时无副作用地补回。
+
+**掉落的账本。** `claimed` 是已结算的掉落序号，`floor(taps / 120) - claimed` 是欠账。猫每次敲击最多结算 1 件（避免一次弹十个提示），面板“领取掉落”先 `config/get` 刷新计数再按最多 10 件批量结算。稀有度权重 8/4/1。
+
+**扩展一件道具**：在 `COSMETIC_ITEMS` 加一条（id、slot、rarity、x/y/w、SVG inner markup），需要“在猫身后”就加 `layer: 'back'`。面板、掉落、校验、i18n 都不用动；`pnpm typecheck` 会盯住类型，`host-smoke` 会盯住“没拥有的不能穿”。
+
 ### 5.13 原版美术模式（v0.3.0）
 
 **为什么需要提取器**：Steam 版 Bongo Cat 是 Unity 游戏，猫、爪、双鼓都是独立的 UI 精灵，打包在 `BongoCat_Data/sharedassets0.assets` 里；仓库不能分发这些版权素材，所以插件只带"提取器"，在用户本机现场读取。
@@ -425,7 +446,7 @@ CSS Modules 由 esbuild 插件内联编译（类名哈希 + `data-plugin-css` �
 | **硬档** | `pnpm verify` | **用户会撞上**：构建产物过期、契约漂移、交互路径坏了 | 非零，CI 挡 PR |
 | **软档** | `pnpm verify:soft` | 仓库内务不准：发布面缺文件、i18n 键缺口、CHANGELOG 缺条目 | 恒为 0，只出声（真实码打印在末尾并写入 `DSH_BC_SOFT_EXIT`） |
 
-硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（68 项，含契约对账、RPC 信封、loopback 写保护与组件 schema）；⑥ browser 冒烟（49 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
+硬档内容：① 构建新鲜度（任一 `src/**` 比 `lib/` 新即红，提示 `pnpm build`）；② 契约探针可构建；③ CSS 模块键名核对；④ **manifest 冒烟（20 项）**——bundle 层、`exports["./client"]`、inject 边是否都指向真实存在的包、产物 `require()` 是否只落在 0.2.0 模块表内、`engines.dsh` 是否只声明 0.2 线、有没有多余的 peerDependencies；⑤ host 冒烟（78 项，含契约对账、RPC 信封、loopback 写保护、组件 schema 与衣柜清洗）；⑥ browser 冒烟（59 项，jsdom 里跑真实产物，含组件层挂载/拖动持久化、贴纸前后层/CSS 校验）。软档内容：发布面 `files[]` 齐全、i18n 三查（声明的键都被用 / 用到的键都声明 / zh+en 覆盖全并集）、CHANGELOG 覆盖当前版本。
 
 分档的理由（参考项目的原话同样适用）：所有判据共用同一种红时，改一行的合规成本被最贵的那条判据决定，贡献者会绕过整条链，真正危险的失败被淹没在无关的红里。
 

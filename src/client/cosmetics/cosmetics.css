@@ -1,0 +1,55 @@
+/* Cosmetics layer — stickers worn by the cat.
+   Plain class names: the layer is built as markup (see render.ts), so the
+   CSS-modules map would never be consulted anyway. */
+
+.bc-decor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.bc-decor-item {
+  position: absolute;
+  display: block;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 2px 3px rgba(30, 20, 30, 0.18));
+  animation: bc-decor-in 220ms ease-out;
+}
+
+.bc-decor-item svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+@keyframes bc-decor-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(0.86); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* Drop toast: a mini sticker next to the text (cat.module.css owns the
+   bubble itself; these two classes only lay its contents out). */
+.bc-drop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.bc-drop-art {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+}
+
+.bc-drop-art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-decor-item { animation: none; }
+}

@@ -123,7 +123,8 @@ function checkContractDrift() {
 function checkStyleKeys() {
   const pairs = [
     ['src/client/cat.ts', 'src/client/cat.module.css'],
-    ['src/client/BongoCatSection.tsx', 'src/client/BongoCatSection.module.css']
+    ['src/client/BongoCatSection.tsx', 'src/client/BongoCatSection.module.css'],
+    ['src/client/cosmetics/WardrobePanel.tsx', 'src/client/cosmetics/wardrobe.module.css']
   ]
   const problems = []
   for (const [tsFile, cssFile] of pairs) {

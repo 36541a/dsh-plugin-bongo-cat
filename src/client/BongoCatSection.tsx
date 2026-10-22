@@ -11,6 +11,7 @@ import {
   WidgetInstance, newWidget, withoutWidget
 } from '../shared/widgets'
 import { WIDGET_DEFINITIONS } from './widgets/registry'
+import { WardrobePanel } from './cosmetics/WardrobePanel'
 import { PRESETS } from './presets'
 import {
   BongoCatSettings, BongoCatKey, ImportResult, NativeStatus, RpcResult, ScannedRoot,
@@ -381,6 +382,12 @@ export function BongoCatSection(props: BongoCatSectionProps) {
             {t('counterReset')}
           </button>
         </div>
+      </div>
+
+      {/* ── wardrobe ───────────────────────────────────────────── */}
+      <div className={styles.group}>
+        <div className={styles['group-title']}>{t('wardrobeSection')}</div>
+        <WardrobePanel store={store} settings={settings} t={t} writable={writable} />
       </div>
 
       {/* ── desktop widgets ────────────────────────────────────── */}
