@@ -124,7 +124,7 @@ const zh: Record<BongoCatKey, string> = {
   widgetMinutes: '分钟',
   widgetChime: '结束提示音',
   wardrobeSection: '装扮',
-  wardrobeHint: '敲击或打字会积累掉落：每 120 次一件，重复的会累计成数量。点格子穿上或摘下，毛色在单独的页签里。',
+  wardrobeHint: '每敲击 1000 次攒 1 次兑换机会，点工具条里的「兑换」领一件，重复的会累计成数量。点格子穿上或摘下，毛色在单独的页签里。',
   wardrobeHat: '帽子',
   wardrobeFace: '表情',
   wardrobeAccessory: '配饰',
@@ -134,18 +134,16 @@ const zh: Record<BongoCatKey, string> = {
   wardrobeFilterOwned: '已拥有',
   wardrobeFilterEquipped: '已装备',
   wardrobeRandom: '随机搭配',
-  wardrobeClaim: '领取掉落',
+  wardrobeExchange: '兑换',
   wardrobeUnequip: '全部卸下',
   wardrobeEmpty: '这个筛选下没有内容。',
   wardrobeLocked: '未解锁',
   wardrobeCollected: '已收集',
   wardrobeNextDrop: '距下一件',
-  wardrobeReady: '有掉落待领取',
-  wardrobeClaimed: '本次获得',
+  wardrobeReady: '可兑换',
+  wardrobeExchanged: '本次兑换',
   wardrobeNewOnes: '其中新解锁',
-  wardrobeNoDrop: '暂无可领取的掉落，再敲几下吧。',
-  wardrobeDropNew: '解锁新装扮！',
-  wardrobeDropDup: '获得重复装扮'
+  wardrobeNoDrop: '还没有可兑换的装扮，再敲几下吧。'
 }
 
 const en: Record<BongoCatKey, string> = {
@@ -228,7 +226,7 @@ const en: Record<BongoCatKey, string> = {
   widgetMinutes: 'Minutes',
   widgetChime: 'Chime at the end',
   wardrobeSection: 'Dress-up',
-  wardrobeHint: 'Taps and keystrokes earn drops — one every 120, duplicates stack up. Click a tile to wear or take it off; colours have their own tab.',
+  wardrobeHint: 'Every 1000 taps earns one exchange — press Exchange in the tool row to claim an item; duplicates stack. Click a tile to wear or take it off; colours have their own tab.',
   wardrobeHat: 'Hats',
   wardrobeFace: 'Face',
   wardrobeAccessory: 'Extras',
@@ -238,18 +236,16 @@ const en: Record<BongoCatKey, string> = {
   wardrobeFilterOwned: 'Owned',
   wardrobeFilterEquipped: 'Worn',
   wardrobeRandom: 'Random outfit',
-  wardrobeClaim: 'Claim drops',
+  wardrobeExchange: 'Exchange',
   wardrobeUnequip: 'Take everything off',
   wardrobeEmpty: 'Nothing under this filter.',
   wardrobeLocked: 'Locked',
   wardrobeCollected: 'Collected',
   wardrobeNextDrop: 'Next drop in',
-  wardrobeReady: 'Drops to claim',
-  wardrobeClaimed: 'Claimed',
+  wardrobeReady: 'Ready to exchange',
+  wardrobeExchanged: 'Exchanged',
   wardrobeNewOnes: 'new',
-  wardrobeNoDrop: 'No drops waiting — keep tapping.',
-  wardrobeDropNew: 'New sticker unlocked!',
-  wardrobeDropDup: 'Duplicate sticker'
+  wardrobeNoDrop: 'Nothing to exchange yet — keep tapping.'
 }
 
 export const inject = ['slots', 'locale', 'connection']

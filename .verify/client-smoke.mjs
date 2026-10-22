@@ -316,7 +316,10 @@ document.body.append(fakeTrigger)
 const fakeDialog = document.createElement('div')
 fakeDialog.setAttribute('role', 'dialog')
 const fakeNav = document.createElement('button')
-fakeNav.textContent = '邦哥猫'
+// The real shell renders an icon inside the same button, so textContent is
+// "🐱 邦哥猫" and only the aria-label matches exactly — the tolerant path.
+fakeNav.setAttribute('aria-label', '邦哥猫')
+fakeNav.textContent = '🐱 邦哥猫'
 fakeNav.addEventListener('click', () => { navClicks += 1 })
 fakeDialog.append(fakeNav)
 document.body.append(fakeDialog)

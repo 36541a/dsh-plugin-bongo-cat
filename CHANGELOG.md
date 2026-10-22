@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.3 — 2026-10-22
+
+**装扮改为「每 1000 次敲击兑换一件」，点猫稳定落到「邦哥猫」设置页**。
+
+- **获取规则**：`TAPS_PER_DROP = 120` 的自动掉落换成 `TAPS_PER_EXCHANGE = 1000` 的手动兑换。敲击不再发奖，只累加账本；面板打开时用新增的 `store.refreshCounter()` 只刷新 `counter` 一个字段（不整份覆盖，避免打断正在进行的编辑），「兑换」按钮在攒够次数前保持禁用，点一次结算所有已攒次数（单次上限 10 件）
+- **清理**：猫端的 `maybeDrop` / `showDropToast`、`.bc-drop*` 样式与两个提示文案随自动掉落一起移除；`claimDrops`→`exchangeItems`、`pendingDrops`→`pendingExchanges`、`tapsUntilNextDrop`→`tapsUntilNextExchange`、`rollDrop`→`rollItem`
+- **点猫落点**：`settings-link.ts` 不再要求 `[role="dialog"]`（某些外壳把设置渲染成整页），导航项按 `aria-label` → 精确文本 → 带图标前缀/后缀的文本三级匹配，并排除猫自己的悬浮层；重试窗口延长到 1.6s（Electron 冷启动较慢），已在目标页时直接返回、不重复点击
+- **面板文案**：「领取掉落」→「兑换」，状态行在攒够时显示「可兑换 N」，否则显示「距下一件 X」
+
+回归：硬档 20 + 74 + 63 = 157 全绿；隔离环境 25 项装扮断言（新增 999/3000 两次边界：999 不生效、3000 解锁 3 次）+ 12 项点猫断言全绿。
+
 ## 0.9.2 — 2026-10-22
 
 **修 `tools/verify-install.mjs` 在 0.1.x 内核上的误报**。

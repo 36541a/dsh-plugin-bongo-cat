@@ -279,11 +279,11 @@ export const WARDROBE_DEFAULTS: WardrobeState = {
   filter: 'all'
 }
 
-/** One drop every N taps — the game's own "play to unlock" pacing, compressed. */
-export const TAPS_PER_DROP = 120
+/** One exchange per N taps — the game's own "play to unlock" pacing. */
+export const TAPS_PER_EXCHANGE = 1000
 
-/** A single claim call never grants more than this (a long-idle profile). */
-export const MAX_CLAIM_PER_CALL = 10
+/** A single exchange call never grants more than this (a long-idle profile). */
+export const MAX_EXCHANGE_PER_CALL = 10
 
 const ITEM_WEIGHT: Record<Rarity, number> = { 1: 8, 2: 4, 3: 1 }
 
@@ -368,28 +368,28 @@ export function collectedCount(state: WardrobeState): number {
   return Object.keys(state.owned).length
 }
 
-/** Drops already earned but not yet rolled, capped for one call. */
-export function pendingDrops(state: WardrobeState, totalTaps: number, max = MAX_CLAIM_PER_CALL): number {
-  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_DROP) - state.claimed
+/** Exchanges earned but not spent, capped for one call. */
+export function pendingExchanges(state: WardrobeState, totalTaps: number, max = MAX_EXCHANGE_PER_CALL): number {
+  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_EXCHANGE) - state.claimed
   return Math.max(0, Math.min(due, max))
 }
 
-/** Taps until the next drop (1..TAPS_PER_DROP). */
-export function tapsUntilNextDrop(state: WardrobeState, totalTaps: number): number {
-  const remainder = Math.floor(Math.max(0, totalTaps)) % TAPS_PER_DROP
-  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_DROP) - state.claimed
+/** Taps until the next exchange (1..TAPS_PER_EXCHANGE); 0 when one is ready. */
+export function tapsUntilNextExchange(state: WardrobeState, totalTaps: number): number {
+  const remainder = Math.floor(Math.max(0, totalTaps)) % TAPS_PER_EXCHANGE
+  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_EXCHANGE) - state.claimed
   if (due > 0) return 0
-  return TAPS_PER_DROP - remainder
+  return TAPS_PER_EXCHANGE - remainder
 }
 
 /**
- * Deterministic roll for drop `index`.
+ * Deterministic roll for exchange `index`.
  *
- * Seeded by the drop's ordinal, not by a running PRNG: replaying a profile
- * (same `claimed`, same taps) always yields the same items, so a claim is
+ * Seeded by the exchange's ordinal, not by a running PRNG: replaying a profile
+ * (same `claimed`, same taps) always yields the same items, so an exchange is
  * idempotent and a test can assert exact contents. Weights favour commons.
  */
-export function rollDrop(index: number): string {
+export function rollItem(index: number): string {
   const seed = ((index % 100_000) * 2_654_435_761) % 4_294_967_296
   let state = seed >>> 0
   state = (state + 0x6d2b79f5) >>> 0
@@ -407,28 +407,34 @@ export function rollDrop(index: number): string {
   return COSMETIC_ITEMS[COSMETIC_ITEMS.length - 1].id
 }
 
-export interface DropGain {
+export interface ExchangeGain {
   id: string
   /** First copy (the panel can call it out). */
   isNew: boolean
 }
 
-export interface ClaimResult {
+export interface ExchangeResult {
   state: WardrobeState
-  gained: DropGain[]
-  /** Drops still owed after this call (the panel offers another claim). */
+  gained: ExchangeGain[]
+  /** Exchanges still owed after this call (the panel offers another one). */
   remaining: number
 }
 
-/** Roll every drop the tap count has earned, up to `max`. */
-export function claimDrops(state: WardrobeState, totalTaps: number, max = MAX_CLAIM_PER_CALL): ClaimResult {
-  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_DROP) - state.claimed
+/**
+ * Spend every exchange the tap count has earned, up to `max`.
+ *
+ * Exchanges are deliberate: nothing is granted while the user types. The panel
+ * calls this when they press the exchange button, which is why the ledger
+ * (`claimed`) is spent here rather than on a tap.
+ */
+export function exchangeItems(state: WardrobeState, totalTaps: number, max = MAX_EXCHANGE_PER_CALL): ExchangeResult {
+  const due = Math.floor(Math.max(0, totalTaps) / TAPS_PER_EXCHANGE) - state.claimed
   if (due <= 0) return { state, gained: [], remaining: 0 }
   const count = Math.min(due, max)
   const owned = { ...state.owned }
-  const gained: DropGain[] = []
+  const gained: ExchangeGain[] = []
   for (let offset = 0; offset < count; offset += 1) {
-    const id = rollDrop(state.claimed + offset)
+    const id = rollItem(state.claimed + offset)
     const isNew = (owned[id] ?? 0) === 0
     owned[id] = Math.min(999, (owned[id] ?? 0) + 1)
     gained.push({ id, isNew })

@@ -46,6 +46,22 @@ export class BongoCatStore {
   }
 
   /**
+   * Refresh host-authoritative fields without replacing the document.
+   *
+   * `counter` only moves through `stats/bump`, which never round-trips through
+   * this store, so a long-lived page holds a stale total. The wardrobe panel
+   * needs the real number when it decides whether an exchange is available;
+   * merging just that field keeps an in-flight edit from being overwritten by
+   * a whole-document reload.
+   */
+  async refreshCounter(): Promise<void> {
+    const result = await this.rpc.call('/bongo-cat', 'config/get', {}) as RpcResult<BongoCatSettings>
+    if (!result.ok) return
+    if (this.snapshot.status !== 'ready' || this.snapshot.value === undefined) return
+    this.publish({ status: 'ready', value: { ...this.snapshot.value, counter: result.value.counter } })
+  }
+
+  /**
    * Coalescing writer: rapid slider writes merge; only the newest patch
    * re-flushes after the in-flight round-trip, so the host never races
    * itself and the UI never blocks on intermediate responses.

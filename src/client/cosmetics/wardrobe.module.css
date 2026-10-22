@@ -189,6 +189,15 @@
   color: #ff5c8a;
 }
 
+/* an exchange is available: make the button read as actionable, not just
+   "not disabled" */
+.tool[data-ready='true'] {
+  border-color: #ff5c8a;
+  background: rgba(255, 143, 163, 0.18);
+  color: #ff5c8a;
+  font-weight: 600;
+}
+
 .tool:disabled {
   opacity: 0.4;
   cursor: not-allowed;

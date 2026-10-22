@@ -1,20 +1,20 @@
 /**
  * The wardrobe panel: category tabs, the sticker grid, the colour wheel and
- * the tool row (filter / dice / claim / take everything off).
+ * the tool row (filter / dice / exchange / take everything off).
  *
  * Every edit is one `wardrobe` patch, i.e. one atomic write of the whole
  * document — the same rule the widget board follows. That makes "equip while
- * a drop lands" a last-writer-wins merge of a complete state rather than two
- * half-patches racing each other.
+ * an exchange lands" a last-writer-wins merge of a complete state rather than
+ * two half-patches racing each other.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { BongoCatSettings, BongoCatKey } from '../settings'
 import type { BongoCatStore } from '../store'
 import {
   type CosmeticItem, type WardrobeState, type WardrobeTab,
-  COSMETIC_ITEMS, FUR_COLORS, MAX_CLAIM_PER_CALL,
-  claimDrops, collectedCount, equipItem, itemsForTab, randomizeOutfit,
-  tapsUntilNextDrop, unequipAll, withFilter
+  COSMETIC_ITEMS, FUR_COLORS, MAX_EXCHANGE_PER_CALL,
+  collectedCount, equipItem, exchangeItems, itemsForTab, pendingExchanges, randomizeOutfit,
+  tapsUntilNextExchange, unequipAll, withFilter
 } from '../../shared/cosmetics'
 import { updateWardrobe } from './writer'
 import styles from './wardrobe.module.css'
@@ -59,6 +59,13 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
   const [note, setNote] = useState<string | null>(null)
   const wardrobe: WardrobeState = settings.wardrobe
 
+  // The tap total only moves through stats/bump, so the snapshot lags behind
+  // whatever accrued while the panel was closed. Opening it re-reads that one
+  // field, which is what enables the exchange button.
+  useEffect(() => {
+    void store.refreshCounter()
+  }, [store])
+
   /**
    * Every edit is a *function* of the current wardrobe, applied through the
    * serialised writer. Passing a snapshot would let a drop that lands on the
@@ -82,14 +89,14 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
   }
 
   /**
-   * Claim: pull the host's persisted tap total first. The panel is usually
+   * Exchange: pull the host's persisted tap total first. The panel is usually
    * opened long after the page loaded, so the store's `counter` is stale by
    * however many taps happened since — a fresh `config/get` is what makes the
-   * button agree with the cat's own ledger.
+   * button agree with the ledger the cat has been adding to.
    */
-  const claim = async (): Promise<void> => {
+  const exchange = async (): Promise<void> => {
     try {
-      await store.load()
+      await store.refreshCounter()
       const fresh = store.getSnapshot()
       if (fresh.status !== 'ready' || fresh.value === undefined) {
         setNote(t('unavailable'))
@@ -102,14 +109,14 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
       let firstTime = 0
       await updateWardrobe(store, (current) => {
         const counter = store.getSnapshot().value?.counter ?? fallbackCounter
-        const result = claimDrops(current, counter, MAX_CLAIM_PER_CALL)
+        const result = exchangeItems(current, counter, MAX_EXCHANGE_PER_CALL)
         gained = result.gained.length
         firstTime = result.gained.filter((gain) => gain.isNew).length
         return result.state
       })
       setNote(gained === 0
         ? t('wardrobeNoDrop')
-        : `${t('wardrobeClaimed')} ${gained} · ${t('wardrobeNewOnes')} ${firstTime}`)
+        : `${t('wardrobeExchanged')} ${gained} · ${t('wardrobeNewOnes')} ${firstTime}`)
     } catch (error) {
       setNote(error instanceof Error ? error.message : String(error))
     }
@@ -118,7 +125,8 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
   const items = itemsForTab(tab)
   const shown = items.filter(visible)
   const equippedCount = Object.values(wardrobe.equipped).filter((id) => id !== null).length
-  const nextDrop = tapsUntilNextDrop(wardrobe, settings.counter)
+  const ready = pendingExchanges(wardrobe, settings.counter)
+  const nextExchange = tapsUntilNextExchange(wardrobe, settings.counter)
 
   return (
     <div className={styles.board} data-role='wardrobe-board'>
@@ -228,11 +236,12 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
         <button
           type='button'
           className={styles.tool}
-          data-role='wardrobe-claim'
-          title={t('wardrobeClaim')}
-          aria-label={t('wardrobeClaim')}
-          disabled={!writable}
-          onClick={() => void claim()}
+          data-role='wardrobe-exchange'
+          title={t('wardrobeExchange')}
+          aria-label={t('wardrobeExchange')}
+          data-ready={ready > 0}
+          disabled={!writable || ready === 0}
+          onClick={() => void exchange()}
         >
           <svg viewBox='0 0 24 24' aria-hidden='true'>
             <path d='M20 12a8 8 0 1 1-2.3-5.6' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' />
@@ -257,7 +266,7 @@ export function WardrobePanel({ store, settings, t, writable }: WardrobePanelPro
 
       <div className={styles.note} data-role='wardrobe-status'>
         {note ?? `${t('wardrobeCollected')} ${collectedCount(wardrobe)}/${COSMETIC_ITEMS.length}`
-          + ` · ${nextDrop === 0 ? t('wardrobeReady') : `${t('wardrobeNextDrop')} ${nextDrop}`}`}
+          + (ready > 0 ? ` · ${t('wardrobeReady')} ${ready}` : ` · ${t('wardrobeNextDrop')} ${nextExchange}`)}
       </div>
       <div className={styles.hint}>{t('wardrobeHint')}</div>
     </div>

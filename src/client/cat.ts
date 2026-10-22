@@ -12,10 +12,8 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
-import { type DropGain, claimDrops, itemById, pendingDrops } from '../shared/cosmetics'
 import { DECOR_BACK_ROLE, DECOR_ROLE, artworkFilter, cosmeticMarkup } from './cosmetics/render'
 import { openBongoCatSettings } from './settings-link'
-import { updateWardrobe } from './cosmetics/writer'
 import { BongoSound } from './sound'
 import { BongoCatKey, BongoCatSettings, NativeStatus, RpcResult, nativeFrameUrl, skinUrl, soundUrl } from './settings'
 import { BongoCatStore } from './store'
@@ -254,50 +252,6 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     }
   }
 
-  /** Announce a drop next to the cat (the panel shows the full ledger). */
-  const showDropToast = (id: string, isNew: boolean): void => {
-    const item = itemById(id)
-    if (item === undefined) return
-    const toast = document.createElement('div')
-    toast.className = `${styles['bc-toast']} bc-drop`
-    toast.dataset.role = 'bongo-cat-drop'
-    const art = document.createElement('span')
-    art.className = 'bc-drop-art'
-    art.innerHTML = `<svg viewBox="0 0 100 100" aria-hidden="true">${item.art}</svg>`
-    const label = document.createElement('span')
-    label.textContent = t ? t(isNew ? 'wardrobeDropNew' : 'wardrobeDropDup') : 'New sticker!'
-    toast.append(art, label)
-    root.append(toast)
-    window.setTimeout(() => toast.remove(), 4200)
-  }
-
-  /**
-   * Roll whatever the tap ledger has earned (one per call, so a profile with a
-   * long history does not unload ten toasts at once).
-   *
-   * `counter` is the host's persisted total from the last load and
-   * `sessionTaps` is this page's contribution — the same arithmetic the badge
-   * uses. Reading the live snapshot instead of the painted one keeps a
-   * concurrent panel edit (filter, fur) from being overwritten.
-   */
-  const maybeDrop = (): void => {
-    const snapshot = store.getSnapshot()
-    if (snapshot.status !== 'ready' || snapshot.value === undefined) return
-    // Cheap gate: this runs on every keystroke and most taps owe nothing.
-    if (pendingDrops(snapshot.value.wardrobe, snapshot.value.counter + sessionTaps, 1) === 0) return
-    // The claim goes through the same serialised writer as the panel, so an
-    // equip from the click that earned this drop is not overwritten by it.
-    const captured: { gain: DropGain | null } = { gain: null }
-    void updateWardrobe(store, (current) => {
-      const counter = store.getSnapshot().value?.counter ?? 0
-      const result = claimDrops(current, counter + sessionTaps, 1)
-      captured.gain = result.gained[0] ?? null
-      return result.state
-    }).then(() => {
-      if (captured.gain !== null) showDropToast(captured.gain.id, captured.gain.isNew)
-    }).catch(() => undefined)
-  }
-
   // ── original artwork plumbing ─────────────────────────────────
   const applyNativeSources = (): void => {
     if (!nativeStatus.available) return
@@ -407,7 +361,6 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     sessionTaps += 1
     applyBadge(settings)
     stats.add(1)
-    maybeDrop()
   }
 
   /**
