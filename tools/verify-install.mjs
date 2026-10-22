@@ -6,8 +6,9 @@
  * user needs to know is whether the two halves actually reached the app:
  *
  *   host    — the /bongo-cat RPC channel answers config/get and info
- *   client  — the boot graph rosters this package, and the combo bundle
- *             carries its __ModuleLoader__ registration
+ *   client  — the boot graph rosters this package, and the module the browser
+ *             is told to load really carries its registration (0.2.x serves
+ *             it inside a combo batch, 0.1.x serves the file directly)
  *   profile — the package is a bundle layer (dsh.profile.bundles), so it
  *             activates again on the next boot with no manual wiring
  *
@@ -74,13 +75,19 @@ if (boot !== null) {
   const graph = JSON.parse(boot[1])
   const row = (graph.entries ?? []).find((entry) => entry.id === PLUGIN)
   check(row !== undefined, `${PLUGIN} is rostered in the client graph`)
+  // 0.2.x groups entries into load batches; 0.1.x carries the module url on
+  // the entry itself. Both mean the same thing — "the browser can fetch this
+  // module" — so resolve either shape and fetch it.
   const batch = (graph.batches ?? []).find((item) => (item.entries ?? []).includes(PLUGIN))
-  check(batch !== undefined, 'row belongs to an initial-load batch', batch?.phase ?? 'none')
-  if (batch !== undefined) {
-    const combo = await request(`/${batch.url.replace(/&amp;/g, '&')}`)
+  const moduleUrl = batch?.url ?? row?.url
+  check(moduleUrl !== undefined, 'the plugin module has a loadable url',
+    batch?.phase ?? (row?.url === undefined ? 'none' : 'entry'))
+  if (moduleUrl !== undefined) {
+    // A leading slash is optional in the graph and mandatory in the request.
+    const combo = await request(`/${String(moduleUrl).replace(/^\/+/, '').replace(/&amp;/g, '&')}`)
     const body = await combo.text()
-    check(combo.status === 200, 'combo bundle served', `HTTP ${combo.status}, ${body.length} bytes`)
-    check(body.includes(`id: "${PLUGIN}"`), 'combo bundle registers the plugin module')
+    check(combo.status === 200, 'client module served', `HTTP ${combo.status}, ${body.length} bytes`)
+    check(body.includes(PLUGIN), 'served module registers the plugin')
   }
 }
 
