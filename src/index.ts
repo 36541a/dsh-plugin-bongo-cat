@@ -68,7 +68,7 @@ import { pruneWidgets } from './shared/widgets'
 import {
   COSMETIC_SLOTS,
   type CosmeticCatalog, type CosmeticItem,
-  TAPS_PER_ITEM, autoGrantItems, emptyEquipped,
+  TAPS_PER_ITEM, WARDROBE_DEFAULTS, autoGrantItems, emptyEquipped,
   legacyItemFor, pickStarterItems, reconcileWardrobe, sanitizeWardrobe
 } from './shared/cosmetics'
 
@@ -752,7 +752,10 @@ export function apply(ctx: Context) {
     // kept, never dropped), an unknown file starts from the starter picks, and
     // the result is reconciled so nothing references a missing id. Then the
     // document is normalised so a hand-edited file cannot inject junk.
-    const wardrobe = sanitizeWardrobe(stored.wardrobe)
+    // A profile that has never written a wardrobe still needs the starter kit:
+    // sanitizeWardrobe(undefined) fails, which used to skip the whole
+    // catalogue block and leave a brand-new install with an empty grid.
+    const wardrobe = sanitizeWardrobe(stored.wardrobe === undefined ? WARDROBE_DEFAULTS : stored.wardrobe)
     if (wardrobe.ok) {
       const cosmetics = readCosmeticsCatalog()
       let value = wardrobe.value

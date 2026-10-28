@@ -19,6 +19,26 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-bongo-'))
 process.env.DSH_HOME = DSH_HOME
 
+/**
+ * A miniature Steam catalogue in the shipped v2 shape. The wardrobe is
+ * catalogue-driven since 0.10: without one the starter kit never appears and
+ * unknown ids cannot be reconciled, so the fixture is part of the harness.
+ */
+const COSMETICS = [
+  { id: 'acorn-cap', name: 'Acorn Cap', slot: 'hat', layer: 'front', rarity: 1, rect: [510, 100, 200, 120] },
+  { id: 'blush', name: 'Blush', slot: 'face', layer: 'front', rarity: 1, rect: [400, 300, 220, 90] },
+  { id: 'rose-scarf', name: 'Rose Scarf', slot: 'accessory', layer: 'front', rarity: 1, rect: [300, 500, 420, 160] },
+  { id: 'paper-wings', name: 'Paper Wings', slot: 'back', layer: 'back', rarity: 3, rect: [180, 220, 660, 420] }
+]
+const writeCatalog = (home) => {
+  const dir = join(home, 'storages', 'bongo-cat', 'native', 'cosmetics')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'catalog.json'), JSON.stringify({
+    version: 2, rectSpace: 'canvas', stamp: 'test-stamp', scale: 3, size: [1020, 750], items: COSMETICS
+  }))
+}
+writeCatalog(DSH_HOME)
+
 // Self-contained: mirror the freshly built host bundle into .verify/lib/
 // so this test always exercises the current build.
 mkdirSync(join(HERE, 'lib'), { recursive: true })
@@ -145,7 +165,12 @@ const hostKeys = Object.keys(hostDefaults).sort()
 const contractKeys = Object.keys(SETTINGS_DEFAULTS).sort()
 check('host schema keys == contract keys', JSON.stringify(hostKeys) === JSON.stringify(contractKeys),
   `host: ${hostKeys.join(',')} | contract: ${contractKeys.join(',')}`)
-const drift = contractKeys.filter((key) => JSON.stringify(hostDefaults[key]) !== JSON.stringify(SETTINGS_DEFAULTS[key]))
+// `wardrobe` is the one key whose resolved value comes from the extracted
+// catalogue (the three-piece starter kit), so it is asserted in the wardrobe
+// section rather than against the static contract default.
+const drift = contractKeys
+  .filter((key) => key !== 'wardrobe')
+  .filter((key) => JSON.stringify(hostDefaults[key]) !== JSON.stringify(SETTINGS_DEFAULTS[key]))
 check('host defaults deep-equal contract defaults', drift.length === 0, `drifted: ${drift.join(',')}`)
 
 // sanitizer unit checks (pure function from the contract)
@@ -225,7 +250,9 @@ console.log('— wardrobe contract —')
 
 r = await rpc('config/get')
 check('wardrobe starts as the starter kit',
-  r.ok === true && r.value.wardrobe.equipped.hat === null && r.value.wardrobe.owned.beanie === 1 && r.value.wardrobe.fur === 'original',
+  r.ok === true && r.value.wardrobe.equipped.hat === null
+    && Object.keys(r.value.wardrobe.owned).length === 3
+    && r.value.wardrobe.owned['acorn-cap'] === 1 && r.value.wardrobe.fur === 'original',
   JSON.stringify(r.value?.wardrobe).slice(0, 180))
 
 const wardrobePatch = {
@@ -245,9 +272,11 @@ check('wardrobe round-trips through the store',
   r.value?.wardrobe?.owned?.beanie === 2 && r.value?.wardrobe?.filter === 'owned',
   JSON.stringify(r.value?.wardrobe).slice(0, 160))
 
-// Forward compatibility: a document from a newer build still loads. Unknown
-// ids leave `owned`, an item that is not owned cannot be worn, and unknown
-// fur/filter values fall back instead of blocking the whole patch.
+// Forward compatibility: a document from a newer build still loads. The write
+// path keeps ids this build cannot place yet (a downgrade must not delete a
+// newer build's items); the load path reconciles them against the catalogue —
+// see the legacy section below. An item that is not owned cannot be worn, and
+// unknown fur/filter values fall back instead of blocking the whole patch.
 r = await rpc('config/set', { patch: { wardrobe: {
   ...wardrobePatch,
   owned: { ...wardrobePatch.owned, 'weather-vane': 3 },
@@ -255,8 +284,8 @@ r = await rpc('config/set', { patch: { wardrobe: {
   fur: 'neon',
   filter: 'wild'
 } } })
-check('unknown item ids are dropped from owned',
-  r.ok === true && r.value.wardrobe.owned['weather-vane'] === undefined && Object.keys(r.value.wardrobe.owned).length === 3,
+check('the write path keeps an id this build cannot place yet',
+  r.ok === true && r.value.wardrobe.owned['weather-vane'] === 3,
   JSON.stringify(r.value?.wardrobe?.owned))
 check('an item you do not own cannot be worn', r.ok === true && r.value.wardrobe.equipped.face === null, String(r.value?.wardrobe?.equipped?.face))
 check('a known item stays worn', r.ok === true && r.value.wardrobe.equipped.hat === 'crown', String(r.value?.wardrobe?.equipped?.hat))
@@ -404,6 +433,7 @@ const legacyFile = join(legacyDir, 'settings.json')
 
 const bootLegacy = async (payload) => {
   if (payload !== undefined) writeFileSync(legacyFile, JSON.stringify(payload))
+  writeCatalog(legacyHome)
   process.env.DSH_HOME = legacyHome
   const bootedRoutes = []
   apply({
@@ -419,29 +449,33 @@ const bootLegacy = async (payload) => {
   }
 }
 
-// Seven drops under the old rule cost 840 taps; the new ledger is 1000/tap.
+// `claimed` is only the roll seed since 0.10 (the balance is the countdown), so
+// a stored cursor must survive untouched; `weather-vane` is the id the
+// catalogue does not know, which the load path has to drop.
 const legacyWardrobe = {
-  equipped: { hat: 'beanie', face: null, accessory: null },
+  equipped: { hat: 'acorn-cap', face: null, accessory: null },
   fur: 'original',
-  owned: { beanie: 1, blush: 1, scarf: 1 },
+  owned: { 'acorn-cap': 1, blush: 1, 'rose-scarf': 1, 'weather-vane': 3 },
   claimed: 7,
   filter: 'all'
 }
 let legacyRpc = await bootLegacy({ counter: 878, wardrobe: legacyWardrobe })
 r = await legacyRpc('config/get')
-check('a pre-0.9.4 cursor is re-based instead of carried as debt',
-  r.ok === true && r.value.wardrobe.claimed === 0, `claimed=${r.value?.wardrobe?.claimed}`)
+check('an id the catalogue does not know is dropped on load',
+  r.ok === true && r.value.wardrobe.owned['weather-vane'] === undefined, JSON.stringify(r.value?.wardrobe?.owned))
+check('the cursor is kept as the roll seed, not re-based',
+  r.ok === true && r.value.wardrobe.claimed === 7, `claimed=${r.value?.wardrobe?.claimed}`)
 check('the migrated ledger carries the 1000-tap tag',
   r.value?.wardrobe?.ledger === 'taps1000', String(r.value?.wardrobe?.ledger))
 check('migration preserves the items and the tap total',
-  r.value?.wardrobe?.owned?.beanie === 1 && r.value?.counter === 878,
+  r.value?.wardrobe?.owned?.['acorn-cap'] === 1 && r.value?.counter === 878,
   JSON.stringify({ counter: r.value?.counter, owned: r.value?.wardrobe?.owned }))
 
-// Writing the document back must not subtract a second time.
+// Writing the document back must not touch the cursor either.
 r = await legacyRpc('config/set', { patch: { wardrobe: r.value.wardrobe } })
-check('the re-base is idempotent across a write', r.ok === true && r.value.wardrobe.claimed === 0, `claimed=${r.value?.wardrobe?.claimed}`)
+check('a write keeps the cursor', r.ok === true && r.value.wardrobe.claimed === 7, `claimed=${r.value?.wardrobe?.claimed}`)
 const persistedWardrobe = JSON.parse(readFileSync(legacyFile, 'utf8')).wardrobe
-check('the migrated document is written back tagged', persistedWardrobe.ledger === 'taps1000' && persistedWardrobe.claimed === 0, JSON.stringify(persistedWardrobe))
+check('the persisted document keeps the tag', persistedWardrobe.ledger === 'taps1000' && persistedWardrobe.claimed === 7, JSON.stringify(persistedWardrobe))
 
 // A document already on the new ledger keeps its cursor untouched.
 legacyRpc = await bootLegacy({ counter: 878, wardrobe: { ...legacyWardrobe, claimed: 4, ledger: 'taps1000' } })
