@@ -54,13 +54,28 @@ const serverState = {
   // A hat, an accessory and a non-default fur: enough to prove the overlay
   // projects a wardrobe, without depending on the drop ledger.
   wardrobe: {
-    equipped: { hat: 'beanie', face: null, accessory: 'scarf' },
+    equipped: { hat: 'acorn-cap', face: null, accessory: 'rose-scarf' },
     fur: 'ginger',
-    owned: { beanie: 1, scarf: 1, blush: 1 },
+    owned: { 'acorn-cap': 1, 'rose-scarf': 1, 'blush-sticker': 1, 'top-hat': 1, 'paper-wings': 1 },
     claimed: 0,
     filter: 'all'
   }
 }
+
+/** Every stats/bump count the client sent, in order (counter-accounting checks). */
+const bumps = []
+
+/**
+ * A miniature catalogue in the real v2 shape: rects in artboard pixels plus the
+ * frame's crop box (0,0 here, so the percentages are easy to assert).
+ */
+const COSMETICS = [
+  { id: 'acorn-cap', name: 'Acorn Cap', slot: 'hat', layer: 'front', rarity: 1, rect: [510, 100, 200, 120] },
+  { id: 'top-hat', name: 'Top Hat', slot: 'hat', layer: 'front', rarity: 2, rect: [510, 60, 200, 220] },
+  { id: 'blush-sticker', name: 'Blush', slot: 'face', layer: 'front', rarity: 1, rect: [400, 300, 220, 90] },
+  { id: 'rose-scarf', name: 'Rose Scarf', slot: 'accessory', layer: 'front', rarity: 2, rect: [300, 500, 420, 160] },
+  { id: 'paper-wings', name: 'Paper Wings', slot: 'back', layer: 'back', rarity: 3, rect: [180, 220, 660, 420] }
+]
 
 const connection = {
   isLoopback: true,
@@ -73,6 +88,7 @@ const connection = {
         return { ok: true, value: { ...serverState } }
       }
       if (method === 'stats/bump') {
+        bumps.push(payload.count)
         serverState.counter += payload.count
         return { ok: true, value: { counter: serverState.counter } }
       }
@@ -81,7 +97,10 @@ const connection = {
         return { ok: true, value: { counter: 0 } }
       }
       if (method === 'native/status') {
-        return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], extractedAt: 'test-stamp' } }
+        return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], box: [0, 0, 1020, 750], extractedAt: 'test-stamp' } }
+      }
+      if (method === 'cosmetics/catalog') {
+        return { ok: true, value: { stamp: 'test-stamp', rectSpace: 'canvas', size: [1020, 750], items: COSMETICS } }
       }
       if (method === 'native/import') {
         return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], extractedAt: 'test-stamp' } }
@@ -273,29 +292,29 @@ console.log('— wardrobe overlay —')
 const decor = el?.querySelector('[data-role="bongo-cat-decor"]')
 const nativeLayer = el?.querySelector('[data-role="bongo-cat-native"]')
 check('decor layer mounts inside the cat stage', decor !== null && decor.parentElement === nativeLayer?.parentElement)
-check('the worn hat is drawn', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'beanie')
-check('the worn accessory is drawn', decor?.querySelector('[data-slot="accessory"]')?.getAttribute('data-item') === 'scarf')
+check('the worn hat is drawn', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'acorn-cap')
+check('the worn accessory is drawn', decor?.querySelector('[data-slot="accessory"]')?.getAttribute('data-item') === 'rose-scarf')
 check('an empty slot draws nothing', decor?.querySelector('[data-slot="face"]') === null)
-check('sticker geometry comes from the catalogue', /left:50%/.test(decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? ''), decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? 'none')
+check('sticker geometry comes from the catalogue', /left:50\.000%/.test(decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? ''), decor?.querySelector('[data-slot="hat"]')?.getAttribute('style') ?? 'none')
 check('fur colour filters the artwork', (nativeLayer?.style.filter ?? '').includes('sepia'), nativeLayer?.style.filter ?? 'none')
 check('the counter badge is not tinted', (el?.querySelector('[data-role="bongo-cat-counter"]')?.style.filter ?? '') === '')
 
 // Changing the wardrobe re-renders the layer: new hat, accessory taken off.
 await payload.store.set({
   wardrobe: {
-    equipped: { hat: 'crown', face: null, accessory: 'wings' },
+    equipped: { hat: 'top-hat', face: null, accessory: 'paper-wings' },
     fur: 'original',
-    owned: { beanie: 1, scarf: 1, blush: 1, crown: 1, wings: 1 },
+    owned: { 'acorn-cap': 1, 'rose-scarf': 1, 'blush-sticker': 1, 'top-hat': 1, 'paper-wings': 1 },
     claimed: 0,
     filter: 'all'
   }
 })
 await sleep(20)
-check('a wardrobe change re-renders the stickers', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'crown')
+check('a wardrobe change re-renders the stickers', decor?.querySelector('[data-slot="hat"]')?.getAttribute('data-item') === 'top-hat')
 // Wings declare `layer: 'back'`; they must render under the artwork, and the
 // front layer must not duplicate them.
 const decorBack = el?.querySelector('[data-role="bongo-cat-decor-back"]')
-check('back-layer items render behind the cat', decorBack?.querySelector('[data-item="wings"]') !== null && decor?.querySelector('[data-item="wings"]') === null)
+check('back-layer items render behind the cat', decorBack?.querySelector('[data-item="paper-wings"]') !== null && decor?.querySelector('[data-item="paper-wings"]') === null)
 check('going back to the original fur clears the filter', (nativeLayer?.style.filter ?? '') === '', nativeLayer?.style.filter ?? 'none')
 
 console.log('— click opens settings —')
@@ -360,6 +379,28 @@ console.log('— stats flush —')
 // The 2 local taps ride the 4s batch window; a direct bump lands immediately.
 const flushResult = await payload.rpc.call('/bongo-cat', 'stats/bump', { count: 3 })
 check('rpc stats/bump reaches host', flushResult.ok === true && flushResult.value.counter === keyBefore + 3, JSON.stringify(flushResult))
+
+console.log('— counter accounting —')
+// Regression guard for the badge double-count and the overlapping-flush
+// re-send: one batch, reported once, and the badge must show the host's
+// number — not host + the taps that batch just carried. The enable toggle
+// above switched the cat off, so turn it back on through the store first.
+await payload.store.set({ enabled: true })
+await sleep(20)
+const badgeNumber = () => Number((el?.querySelector('[data-role="bongo-cat-counter"]')?.textContent ?? '').replace(/[^\d]/g, ''))
+const beforeBatch = serverState.counter
+// Taps typed before this section are still in the batch window; top the batch
+// up to exactly STATS_FLUSH_TAPS so the flush drains it completely.
+const unsentBefore = badgeNumber() - beforeBatch
+const burst = Math.max(1, 20 - (unsentBefore % 20))
+bumps.length = 0
+for (let index = 0; index < burst; index += 1) {
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'x', bubbles: true }))
+}
+await sleep(80)
+check('a burst crosses exactly one flush', bumps.length === 1, JSON.stringify(bumps))
+check('the host counted exactly what was reported', serverState.counter === beforeBatch + (bumps[0] ?? 0), `${serverState.counter} vs ${beforeBatch}+${bumps[0]}`)
+check('the badge shows the host counter, not double', badgeNumber() === serverState.counter, `${badgeNumber()} vs ${serverState.counter}`)
 
 console.log('— widget dock —')
 const widgetLayer = document.getElementById('dsh-bongo-cat-widgets')

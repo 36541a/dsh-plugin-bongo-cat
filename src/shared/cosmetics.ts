@@ -53,7 +53,15 @@ export interface CosmeticItem {
 export interface CosmeticCatalog {
   /** Extraction stamp; also the cache-buster on overlay/icon URLs. */
   stamp: string
-  /** The native frame canvas the rects are measured against. */
+  /**
+   * The coordinate space `rect` lives in:
+   *  - `canvas` (v2): pixels on the full 340×250 artboard, mapped onto the
+   *    stage through the frame's crop box — the catalogue survives a skin
+   *    change, because only the crop box moves;
+   *  - absent/`box` (v1): already relative to the frame box.
+   */
+  rectSpace?: 'canvas' | 'box'
+  /** The artboard the rects are measured against. */
   size: [number, number]
   items: CosmeticItem[]
 }
@@ -143,10 +151,19 @@ export function collectedCount(state: WardrobeState): number {
   return Object.keys(state.owned).length
 }
 
-/** Taps still needed before the balance reaches the next automatic grant. */
+/**
+ * Taps still needed before the balance reaches the next automatic grant.
+ *
+ * 0 means the balance already sits on a multiple of TAPS_PER_ITEM, i.e. a drop
+ * is due as soon as the host settles it — the old code reported a full
+ * TAPS_PER_ITEM here, so a profile stuck at 1000 (no catalogue imported yet)
+ * showed "next drop in 1000" forever.
+ */
 export function tapsUntilNextItem(counter: number): number {
-  const remainder = Math.max(0, Math.floor(counter)) % TAPS_PER_ITEM
-  return remainder === 0 ? TAPS_PER_ITEM : TAPS_PER_ITEM - remainder
+  const balance = Math.max(0, Math.floor(counter))
+  if (balance === 0) return TAPS_PER_ITEM
+  const remainder = balance % TAPS_PER_ITEM
+  return remainder === 0 ? 0 : TAPS_PER_ITEM - remainder
 }
 
 /** Toggle one item on its slot; no-op when it is not owned. */

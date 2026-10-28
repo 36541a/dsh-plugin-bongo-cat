@@ -66,6 +66,7 @@ import {
 } from './shared/settings-contract'
 import { pruneWidgets } from './shared/widgets'
 import {
+  COSMETIC_SLOTS,
   type CosmeticCatalog, type CosmeticItem,
   TAPS_PER_ITEM, autoGrantItems, emptyEquipped,
   legacyItemFor, pickStarterItems, reconcileWardrobe, sanitizeWardrobe
@@ -510,7 +511,7 @@ export function apply(ctx: Context) {
   let cosmeticsCache: CosmeticCatalog | null = null
   const readCosmeticsCatalog = (): CosmeticCatalog => {
     if (cosmeticsCache !== null) return cosmeticsCache
-    const raw = readJson<{ items?: unknown; stamp?: unknown; size?: unknown }>(cosmeticsCatalogPath)
+    const raw = readJson<{ items?: unknown; stamp?: unknown; size?: unknown; rectSpace?: unknown }>(cosmeticsCatalogPath)
     const items: CosmeticItem[] = []
     if (raw !== null && Array.isArray(raw.items)) {
       for (const entry of raw.items) {
@@ -537,7 +538,8 @@ export function apply(ctx: Context) {
     const size = raw !== null && Array.isArray(raw.size) && raw.size.length === 2 && raw.size.every((value) => typeof value === 'number' && Number.isFinite(value))
       ? [raw.size[0], raw.size[1]] as [number, number]
       : [777, 504] as [number, number]
-    cosmeticsCache = { stamp, size, items }
+    const rectSpace = raw !== null && raw.rectSpace === 'canvas' ? 'canvas' as const : 'box' as const
+    cosmeticsCache = { stamp, rectSpace, size, items }
     return cosmeticsCache
   }
 
@@ -553,6 +555,8 @@ export function apply(ctx: Context) {
     available: boolean
     skin?: string
     size?: number[]
+    /** Crop box of the frames inside the full canvas: [left, top, right, bottom]. */
+    box?: number[]
     extractedAt?: string
     gameDir?: string
     missing?: string
@@ -566,6 +570,9 @@ export function apply(ctx: Context) {
       available: true,
       skin: typeof meta.skin === 'string' ? meta.skin : undefined,
       size: Array.isArray(meta.size) ? (meta.size as number[]) : undefined,
+      box: Array.isArray(meta.box) && meta.box.length === 4 && meta.box.every((value) => typeof value === 'number')
+        ? (meta.box as number[])
+        : undefined,
       extractedAt: typeof meta.extractedAt === 'string' ? meta.extractedAt : undefined,
       gameDir: typeof meta.gameDir === 'string' ? meta.gameDir : undefined
     }
@@ -751,17 +758,28 @@ export function apply(ctx: Context) {
       let value = wardrobe.value
       if (cosmetics.items.length > 0) {
         const known = new Set(cosmetics.items.map((item) => item.id))
-        const legacy = Object.keys(value.owned).some((id) => !known.has(id))
         const owned: Record<string, number> = {}
+        // old id → catalogue id. Mapping the *worn* ids through the same table
+        // keeps an outfit intact across the migration; the old code wiped every
+        // equipped slot as soon as one unknown id showed up.
+        const remap = new Map<string, string>()
         for (const [oldId, count] of Object.entries(value.owned)) {
           const mapped = legacyItemFor(cosmetics.items, oldId)?.id ?? oldId
-          if (!cosmetics.items.some((item) => item.id === mapped)) continue
+          if (!known.has(mapped)) continue
+          remap.set(oldId, mapped)
           owned[mapped] = Math.min(999, (owned[mapped] ?? 0) + count)
         }
-        const equipped = legacy ? emptyEquipped() : value.equipped
+        const equipped = emptyEquipped()
+        for (const slot of COSMETIC_SLOTS) {
+          const worn = value.equipped[slot]
+          if (worn === null) continue
+          equipped[slot] = remap.get(worn) ?? worn
+        }
         if (Object.keys(owned).length === 0) {
           for (const id of pickStarterItems(cosmetics.items)) owned[id] = 1
         }
+        // reconcileWardrobe clears whatever the catalogue or `owned` no longer
+        // backs, one slot at a time.
         value = reconcileWardrobe({ ...value, owned, equipped }, cosmetics.items)
       }
       next.wardrobe = value
@@ -789,12 +807,18 @@ export function apply(ctx: Context) {
     settingsCache = next
     const payload = JSON.stringify(next, null, 2)
     // One write chain: two concurrent config/set calls must not lose an update.
+    // The chain itself stays resolved (a failed write must not poison every
+    // later one), but the failure is carried out to *this* caller: swallowing
+    // it made config/set answer ok while the file still held the old document.
+    let failure: unknown = null
     writeChain = writeChain.then(() => {
       const tmp = settingsPath + '.tmp'
       writeFileSync(tmp, payload, 'utf8')
       renameSync(tmp, settingsPath)
-    }).catch(() => undefined)
-    return writeChain
+    }).catch((error) => { failure = error })
+    return writeChain.then(() => {
+      if (failure !== null) throw failure instanceof Error ? failure : new Error(String(failure))
+    })
   }
 
   const scope = {
@@ -1073,7 +1097,7 @@ export function apply(ctx: Context) {
 
       case 'cosmetics/catalog': {
         const catalog = readCosmeticsCatalog()
-        return ok({ stamp: catalog.stamp, size: catalog.size, items: catalog.items })
+        return ok({ stamp: catalog.stamp, rectSpace: catalog.rectSpace, size: catalog.size, items: catalog.items })
       }
 
       case 'info': {

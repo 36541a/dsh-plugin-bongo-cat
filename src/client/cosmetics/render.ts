@@ -34,10 +34,24 @@ export function cosmeticIconUrl(id: string, stamp: string): string {
  * Values interpolated here all come from the extracted catalogue (ids and
  * numbers written by us), never from settings input, so there is no injection
  * surface: `wardrobe` has already been sanitised against that catalogue.
+ *
+ * @param box - the frame's crop box inside the artboard (`native/status`).
+ *   Canvas-space rects (v2 catalogue) are mapped through it, so the overlays
+ *   stay glued to the cat when a different skin re-crops the frame.
  */
-export function cosmeticMarkup(wardrobe: WardrobeState, catalog: CosmeticCatalog, layer: 'front' | 'back' = 'front'): string {
+export function cosmeticMarkup(
+  wardrobe: WardrobeState,
+  catalog: CosmeticCatalog,
+  layer: 'front' | 'back' = 'front',
+  box?: readonly number[]
+): string {
   const byId = new Map(catalog.items.map((item) => [item.id, item]))
   const [stageWidth, stageHeight] = catalog.size.length === 2 ? catalog.size : [1, 1]
+  // A v1 catalogue already stores box-relative pixels, so it maps onto the
+  // whole stage; a v2 one is in artboard pixels and needs the crop box.
+  const crop = catalog.rectSpace === 'canvas' && box?.length === 4
+    ? { left: box[0], top: box[1], width: Math.max(1, box[2] - box[0]), height: Math.max(1, box[3] - box[1]) }
+    : { left: 0, top: 0, width: stageWidth, height: stageHeight }
   const parts: string[] = []
   for (const slot of COSMETIC_SLOTS) {
     const id = wardrobe.equipped[slot]
@@ -45,12 +59,12 @@ export function cosmeticMarkup(wardrobe: WardrobeState, catalog: CosmeticCatalog
     const item = byId.get(id)
     if (item === undefined) continue
     if ((item.layer ?? 'front') !== layer) continue
-    const [x, y, width, height] = item.rect ?? [0, 0, stageWidth, stageHeight]
+    const [x, y, width, height] = item.rect ?? [0, 0, crop.width, crop.height]
     const style = [
-      `left:${(x / stageWidth * 100).toFixed(3)}%`,
-      `top:${(y / stageHeight * 100).toFixed(3)}%`,
-      `width:${(width / stageWidth * 100).toFixed(3)}%`,
-      `height:${(height / stageHeight * 100).toFixed(3)}%`
+      `left:${((x - crop.left) / crop.width * 100).toFixed(3)}%`,
+      `top:${((y - crop.top) / crop.height * 100).toFixed(3)}%`,
+      `width:${(width / crop.width * 100).toFixed(3)}%`,
+      `height:${(height / crop.height * 100).toFixed(3)}%`
     ].join(';')
     parts.push(
       `<img class="bc-decor-item" data-slot="${slot}" data-item="${item.id}" style="${style}"`

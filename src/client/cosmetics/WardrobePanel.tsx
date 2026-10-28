@@ -254,7 +254,7 @@ export function WardrobePanel({ store, settings, rpc, t, writable }: WardrobePan
       </div>
 
       <div className={styles.note} data-role='wardrobe-status'>
-        {note ?? `${t('wardrobeCollected')} ${collectedCount(wardrobe)}/${total} · ${t('wardrobeNextDrop')} ${nextItem}`}
+        {note ?? `${t('wardrobeCollected')} ${collectedCount(wardrobe)}/${total} · ${nextItem === 0 ? t('wardrobeReady') : `${t('wardrobeNextDrop')} ${nextItem}`}`}
       </div>
       <div className={styles.hint}>{t('wardrobeHint')}</div>
     </div>

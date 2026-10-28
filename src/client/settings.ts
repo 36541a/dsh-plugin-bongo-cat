@@ -48,6 +48,8 @@ export interface NativeStatus {
   available: boolean
   skin?: string
   size?: number[]
+  /** Crop box of the frames inside the full canvas: [left, top, right, bottom]. */
+  box?: number[]
   extractedAt?: string
   gameDir?: string
   missing?: string

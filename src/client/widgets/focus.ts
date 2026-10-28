@@ -51,6 +51,8 @@ export const focusWidget: WidgetDefinition = {
     let total = remaining
     let deadline: number | null = null
     let ticker: number | null = null
+    /** The "show 00:00 for a moment" timer; must die with the card. */
+    let rearm: number | null = null
 
     const stopTicker = (): void => {
       if (ticker !== null) window.clearInterval(ticker)
@@ -73,7 +75,9 @@ export const focusWidget: WidgetDefinition = {
       paint()
       if (config.chime) chime(0.6)
       // Leave the 00:00 card up for a moment, then rearm.
-      window.setTimeout(() => {
+      if (rearm !== null) window.clearTimeout(rearm)
+      rearm = window.setTimeout(() => {
+        rearm = null
         remaining = total
         paint()
       }, 5000)
@@ -127,6 +131,8 @@ export const focusWidget: WidgetDefinition = {
       },
       destroy() {
         stopTicker()
+        if (rearm !== null) window.clearTimeout(rearm)
+        rearm = null
         toggle.removeEventListener('click', onToggle)
         reset.removeEventListener('click', onReset)
         root.remove()

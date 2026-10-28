@@ -77,6 +77,10 @@ export function attachWidgetDock(
     card.dataset.widgetId = instance.id
     card.dataset.widgetType = instance.type
     card.dataset.size = instance.size
+    // Applied at mount, not only in sync()'s "already mounted" branch: a card
+    // that boots with the page would otherwise stay fully opaque until the
+    // next store publish.
+    card.style.opacity = String(instance.opacity)
 
     const head = document.createElement('header')
     head.className = 'bc-widget-head'

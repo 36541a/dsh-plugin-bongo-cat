@@ -38,14 +38,28 @@ export interface BumpResult {
   granted?: { id: string; isNew: boolean }[]
 }
 
-/** Stat flush helper: batches counter bumps over the RPC channel. */
+/**
+ * Stat flush helper: batches counter bumps over the RPC channel.
+ *
+ * `pending` only ever holds taps the host has *not* been told about yet: the
+ * batch is taken out of it before the request goes out, so
+ *   - taps typed during the round trip queue for the next batch instead of
+ *     being zeroed when the response lands, and
+ *   - the counter never sits at >= STATS_FLUSH_TAPS while a request is in
+ *     flight, which used to fire one overlapping bump per keystroke and
+ *     report the same taps several times.
+ */
 class StatsFlusher {
   private pending = 0
   private timer: number | null = null
+  private inFlight: Promise<void> | null = null
+  private disposed = false
 
   constructor(
     private readonly rpc: ClientConnectionRpc,
-    private readonly onResult: (result: BumpResult) => void
+    /** `sent` is how many taps this round trip carried, so the caller can
+     *  retire exactly that many local taps. */
+    private readonly onResult: (result: BumpResult, sent: number) => void
   ) {}
 
   add(count: number): void {
@@ -67,19 +81,37 @@ class StatsFlusher {
       window.clearTimeout(this.timer)
       this.timer = null
     }
+    // One bump at a time: a concurrent one would carry taps that are already
+    // in flight and the host would count them twice.
+    if (this.inFlight !== null) return this.inFlight
     if (this.pending === 0) return
-    const count = this.pending
-    const result = await this.rpc.call('/bongo-cat', 'stats/bump', { count }) as RpcResult<BumpResult>
-    if (result.ok) {
-      this.pending = 0
-      this.onResult(result.value)
+    const sent = this.pending
+    this.pending = 0
+    this.inFlight = (async () => {
+      try {
+        const result = await this.rpc.call('/bongo-cat', 'stats/bump', { count: sent }) as RpcResult<BumpResult>
+        if (result.ok) this.onResult(result.value, sent)
+        else this.pending += sent
+      } catch {
+        // a rejected call must not swallow the taps either
+        this.pending += sent
+      }
+    })()
+    try {
+      await this.inFlight
+    } finally {
+      this.inFlight = null
     }
-    // on failure the pending count stays and rides the next flush
+    // A burst can cross the threshold again while the first bump was out.
+    if (!this.disposed && this.pending >= STATS_FLUSH_TAPS) void this.flush()
   }
 
   dispose(): void {
+    this.disposed = true
     if (this.timer !== null) window.clearTimeout(this.timer)
     this.timer = null
+    // Last chance for whatever is still unsent (the overlay is going away).
+    if (this.pending > 0 && this.inFlight === null) void this.flush()
   }
 }
 
@@ -93,7 +125,15 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   if (document.getElementById(ROOT_ID) !== null) return () => undefined
 
   const sound = new BongoSound()
-  const stats = new StatsFlusher(rpc, (result) => {
+  /**
+   * Taps the host has not acknowledged yet. The badge renders
+   * `host counter + unsentTaps`, so a tap is counted exactly once: the flush
+   * retires its batch the moment the host confirms it, and the counter that
+   * comes back already contains those taps.
+   */
+  let unsentTaps = 0
+  const stats = new StatsFlusher(rpc, (result, sent) => {
+    unsentTaps = Math.max(0, unsentTaps - sent)
     store.applyHostState({
       counter: result.counter,
       ...(result.lifetimeTaps === undefined ? {} : { lifetimeTaps: result.lifetimeTaps }),
@@ -185,7 +225,6 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let spriteIdleTimer: number | null = null
   let hintToastTimer: number | null = null
   let dropToastTimer: number | null = null
-  let sessionTaps = 0
   let nativeStatus: NativeStatus = { available: false }
   let nativeStamp = ''
   let nativeFrame: (typeof NATIVE_FRAMES)[number] = 'idle'
@@ -239,7 +278,10 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
 
   const applyBadge = (next: BongoCatSettings): void => {
     badge.style.display = next.showCounter ? '' : 'none'
-    count.textContent = (next.counter + sessionTaps).toLocaleString()
+    // `next.counter` is the host's balance (already debited for drops) and
+    // already contains every tap the host confirmed; only the unconfirmed
+    // ones are added on top.
+    count.textContent = (next.counter + unsentTaps).toLocaleString()
   }
 
   const applySound = (next: BongoCatSettings): void => {
@@ -264,11 +306,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   let catalog: CosmeticCatalog = { stamp: '', size: [1, 1], items: [] }
   const applyCosmetics = (next: BongoCatSettings): void => {
     const wardrobe = next.wardrobe
-    const key = `${catalog.stamp}|${wardrobe.fur}|${wardrobe.equipped.hat ?? ''}|${wardrobe.equipped.face ?? ''}|${wardrobe.equipped.back ?? ''}|${wardrobe.equipped.accessory ?? ''}`
+    // The frame's crop box is part of the key: switching skins re-crops the
+    // frames, and the overlays are positioned against that box.
+    const box = (nativeStatus.box ?? []).join(',')
+    const key = `${catalog.stamp}|${box}|${wardrobe.fur}|${wardrobe.equipped.hat ?? ''}|${wardrobe.equipped.face ?? ''}|${wardrobe.equipped.back ?? ''}|${wardrobe.equipped.accessory ?? ''}`
     if (key !== cosmeticKey) {
       cosmeticKey = key
-      decor.innerHTML = cosmeticMarkup(wardrobe, catalog, 'front')
-      decorBack.innerHTML = cosmeticMarkup(wardrobe, catalog, 'back')
+      decor.innerHTML = cosmeticMarkup(wardrobe, catalog, 'front', nativeStatus.box)
+      decorBack.innerHTML = cosmeticMarkup(wardrobe, catalog, 'back', nativeStatus.box)
     }
     const filter = artworkFilter(wardrobe)
     if (nativeWrap.style.filter !== filter) {
@@ -316,6 +361,8 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     if (disposed || settings === null) return
     applyMode(settings)
     applyPosition(settings)
+    // A new crop box moves the overlays with the artwork.
+    applyCosmetics(settings)
   }
 
   const refreshCosmetics = async (): Promise<void> => {
@@ -428,7 +475,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     setTap(side)
     setSpriteFrame(side === 'left' ? 1 : 2)
     if (settings.soundEnabled) sound.tok(1)
-    sessionTaps += 1
+    unsentTaps += 1
     applyBadge(settings)
     stats.add(1)
   }
@@ -624,7 +671,8 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   stage.addEventListener('pointerup', onStagePointerUp)
   stage.addEventListener('pointercancel', onStagePointerUp)
   stage.addEventListener('click', onStageClick)
-  window.addEventListener('pagehide', () => { void stats.flush() })
+  const onPageHide = (): void => { void stats.flush() }
+  window.addEventListener('pagehide', onPageHide)
 
   // the settings panel fires this after importing / removing the original art
   const onNativeChanged = (): void => {
@@ -652,6 +700,7 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
     document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('bongo-cat:native-changed', onNativeChanged)
     window.removeEventListener('resize', onResize)
+    window.removeEventListener('pagehide', onPageHide)
     stage.removeEventListener('pointerdown', onStagePointerDown)
     stage.removeEventListener('pointermove', onStagePointerMove)
     stage.removeEventListener('pointerup', onStagePointerUp)

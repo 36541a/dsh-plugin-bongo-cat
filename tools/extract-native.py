@@ -63,6 +63,18 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
+# Dress-up overlays are a layer of their own, not part of the cat's composition.
+#
+# Every item sprite is authored in its own box (m_Rect, 256x256 for hats and
+# props, 128x128 for the emoji faces) whose CENTRE is the pivot, and the game
+# hangs that centre on the cat's head. Two numbers are needed to reproduce it:
+# the anchor (the head's centre in unscaled canvas pixels, read off the idle
+# frame) and the layer scale. The scale is measured, not guessed: at 1.0 a top
+# hat comes out wider than the cat's head, at 0.7 it sits on it the way the
+# in-game picker shows.
+COSMETIC_ANCHOR = (140, 55)
+COSMETIC_SCALE = 0.7
+
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
 # (the matching drum sprite is the other half, absent from this cat-only
@@ -396,8 +408,31 @@ def load_item_names(assets: Path, script_ids: dict[int, str]) -> list[str]:
     return sorted(set(names))
 
 
-def export_cosmetics(assets: Path, out: Path, box: tuple[int, int, int, int], scale: int) -> dict:
-    """Export every dress-up overlay as PNG + write native/cosmetics/catalog.json."""
+def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -> dict:
+    """Export every dress-up overlay as PNG + write native/cosmetics/catalog.json.
+
+    Rects are stored in CANVAS coordinates, so the catalogue does not depend on
+    the frame's crop box: switching skins only re-crops the frames, and the
+    browser maps canvas → frame with the box from native.json. That is what
+    makes a skin switch cheap — the 514 overlays are exported once.
+    """
+    cosmetic_dir = out / COSMETIC_DIR
+    catalog_path = cosmetic_dir / "catalog.json"
+    if not force and catalog_path.exists():
+        try:
+            existing = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = None
+        if (
+            isinstance(existing, dict)
+            and existing.get("version") == 2
+            and existing.get("rectSpace") == "canvas"
+            and existing.get("scale") == scale
+            and existing.get("items")
+        ):
+            print(json.dumps({"ok": True, "cosmetics": len(existing["items"]), "skipped": True}, ensure_ascii=False))
+            return existing
+
     game = assets.parent.parent
     script_ids = load_script_ids(game)
     raw_names = load_item_names(assets, script_ids)
@@ -449,27 +484,31 @@ def export_cosmetics(assets: Path, out: Path, box: tuple[int, int, int, int], sc
     cosmetic_dir = out / COSMETIC_DIR
     cosmetic_dir.mkdir(parents=True, exist_ok=True)
     width, height = CANVAS[0] * scale, CANVAS[1] * scale
-    left, top, right, bottom = box
+    k = COSMETIC_SCALE
     exported = 0
     for item in cosmetics:
         sprite = sprite_objects[item["sprite"]].read()
         image = sprite.image.convert("RGBA")
         rect = sprite.m_RD.textureRect
         rx, ry, rw, rh = rect.x, rect.y, rect.width, rect.height
-        image = image.resize((image.width * scale, image.height * scale), Image.LANCZOS)
+        # The sprite's own authored box (m_Rect), not a hardcoded 256: the
+        # emoji faces are 128x128 and were being shifted by half a box.
+        box_w, box_h = sprite.m_Rect.width, sprite.m_Rect.height
+        image = image.resize((max(1, int(rw * scale * k)), max(1, int(rh * scale * k))), Image.LANCZOS)
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        x = (ORIGIN["cat"][0] + rx) * scale
-        y = (ORIGIN["cat"][1] + (256 - ry - rh)) * scale
-        canvas.alpha_composite(image, (int(x), int(y)))
-        # Crop to the overlay's own content and remember where it sits inside
-        # the frame box: the browser positions it from `rect` (stage pixels),
-        # so the files stay small and the alignment stays exact.
+        # Box centre on the anchor, then the art's own offset inside the box
+        # (textureRect is y-up, the canvas is y-down).
+        x = (COSMETIC_ANCHOR[0] - box_w / 2 * k + rx * k) * scale
+        y = (COSMETIC_ANCHOR[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
+        canvas.alpha_composite(image, (int(round(x)), int(round(y))))
+        # Crop to the overlay's own content; `rect` stays in CANVAS pixels so
+        # the catalogue survives a change of skin (and of crop box).
         content_box = canvas.getbbox() or (0, 0, width, height)
         overlay = canvas.crop(content_box)
         overlay.save(cosmetic_dir / f"{item['id']}.png")
         item["rect"] = [
-            content_box[0] - left,
-            content_box[1] - top,
+            content_box[0],
+            content_box[1],
             content_box[2] - content_box[0],
             content_box[3] - content_box[1],
         ]
@@ -486,10 +525,11 @@ def export_cosmetics(assets: Path, out: Path, box: tuple[int, int, int, int], sc
 
     stamp = __import__("datetime").datetime.now().isoformat(timespec="seconds")
     catalog = {
-        "version": 1,
+        "version": 2,
+        "rectSpace": "canvas",
         "stamp": stamp,
         "scale": scale,
-        "size": [right - left, bottom - top],
+        "size": [width, height],
         "items": [
             {k: item[k] for k in ("id", "name", "slot", "layer", "rarity", "rect")}
             for item in cosmetics
@@ -509,6 +549,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true", help="list installed skins and exit")
     parser.add_argument("--with-drums", action="store_true", help="include the bongo drums (default: cat only)")
     parser.add_argument("--catalog", action="store_true", help="export skin icons + skins.json and exit")
+    parser.add_argument("--cosmetics", action="store_true", help="re-export the dress-up catalogue even when it is up to date")
     args = parser.parse_args()
 
     game = find_game(args.game)
@@ -565,9 +606,11 @@ def main() -> None:
     for name, image in frames.items():
         image.save(out / f"{name}.png")
 
-    # Dress-up overlays ride along: same canvas, same crop box as the frames,
-    # so the browser can paint them on the stage without extra geometry.
-    cosmetic_catalog = export_cosmetics(assets, out, box, max(1, min(6, args.scale)))
+    # Dress-up overlays ride along on their own canvas-space coordinates: the
+    # catalogue is exported once and reused across skins, so a skin switch only
+    # re-crops the frames (the old code re-exported all 514 overlays every time
+    # and made switching take ~11 s).
+    cosmetic_catalog = export_cosmetics(assets, out, max(1, min(6, args.scale)), force=args.cosmetics)
 
     meta = {
         "source": "steam-bongo-cat",
@@ -577,6 +620,9 @@ def main() -> None:
         "drums": bool(args.with_drums),
         "frames": {name: f"{name}.png" for name in frames},
         "size": list(frames["idle"].size),
+        # Where the cropped frame sits inside the full canvas. The browser needs
+        # it to map the canvas-space cosmetic rects onto the stage.
+        "box": [int(v) for v in box],
         "cosmetics": {
             "count": len(cosmetic_catalog["items"]),
             "stamp": cosmetic_catalog["stamp"],
