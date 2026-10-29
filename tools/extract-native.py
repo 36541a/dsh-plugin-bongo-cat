@@ -63,17 +63,28 @@ ORIGIN = {
 }
 DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 
-# Dress-up overlays are a layer of their own, not part of the cat's composition.
+# Dress-up overlays are a layer of their own, and the game's own prefab says
+# exactly where it goes. Under `LobbyMember/Cat_Multiplayer/Visuals/BobTransform`
+# (all children anchored at (0.5,0.5), pivot (0.5,0.5), 128x128):
 #
-# Every item sprite is authored in its own box (m_Rect, 256x256 for hats and
-# props, 128x128 for the emoji faces) whose CENTRE is the pivot, and the game
-# hangs that centre on the cat's head. Two numbers are needed to reproduce it:
-# the anchor (the head's centre in unscaled canvas pixels, read off the idle
-# frame) and the layer scale. The scale is measured, not guessed: at 1.0 a top
-# hat comes out wider than the cat's head, at 0.7 it sits on it the way the
-# in-game picker shows.
-COSMETIC_ANCHOR = (140, 55)
-COSMETIC_SCALE = 0.7
+#     Body   anchoredPosition (-6.3,  9.8)   256px sprite drawn into 128 -> x0.5
+#     Hat    anchoredPosition ( 10.0, 45.0)  256px sprite drawn into 128 -> x0.5
+#
+# This canvas is in *sprite* pixels, i.e. twice the UI units those nodes use,
+# so the 0.5 UI scale cancels out: an item is placed at 1:1 with its sprite
+# and only the offset survives. Converting the Hat node into canvas pixels:
+#
+#     dx = (10.0 - (-6.3)) * 2 =  32.6     dy = (45.0 - 9.8) * -2 = -70.4
+#     anchor = ORIGIN["cat"] + 128 + (dx, dy) = (200.6, 2.6)
+#
+# The game has a single cosmetic node (one item worn at a time); the plugin's
+# four slots all hang off it.
+COSMETIC_ANCHOR = (200.6, 2.6)
+COSMETIC_SCALE = 1.0
+
+# Bumped whenever the geometry above changes, so an existing catalogue is
+# re-exported instead of silently keeping rects from the old formula.
+CATALOG_VERSION = 3
 
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
@@ -425,7 +436,7 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
             existing = None
         if (
             isinstance(existing, dict)
-            and existing.get("version") == 2
+            and existing.get("version") == CATALOG_VERSION
             and existing.get("rectSpace") == "canvas"
             and existing.get("scale") == scale
             and existing.get("items")
@@ -483,7 +494,6 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
 
     cosmetic_dir = out / COSMETIC_DIR
     cosmetic_dir.mkdir(parents=True, exist_ok=True)
-    width, height = CANVAS[0] * scale, CANVAS[1] * scale
     k = COSMETIC_SCALE
     exported = 0
     for item in cosmetics:
@@ -494,24 +504,20 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
         # The sprite's own authored box (m_Rect), not a hardcoded 256: the
         # emoji faces are 128x128 and were being shifted by half a box.
         box_w, box_h = sprite.m_Rect.width, sprite.m_Rect.height
-        image = image.resize((max(1, int(rw * scale * k)), max(1, int(rh * scale * k))), Image.LANCZOS)
-        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        width_px = max(1, int(round(image.width * scale * k)))
+        height_px = max(1, int(round(image.height * scale * k)))
+        image = image.resize((width_px, height_px), Image.LANCZOS)
         # Box centre on the anchor, then the art's own offset inside the box
-        # (textureRect is y-up, the canvas is y-down).
+        # (textureRect is y-up, the canvas is y-down). No intermediate canvas:
+        # a tall hat legitimately sits above the artboard, and compositing
+        # through one would clip it.
         x = (COSMETIC_ANCHOR[0] - box_w / 2 * k + rx * k) * scale
         y = (COSMETIC_ANCHOR[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
-        canvas.alpha_composite(image, (int(round(x)), int(round(y))))
-        # Crop to the overlay's own content; `rect` stays in CANVAS pixels so
-        # the catalogue survives a change of skin (and of crop box).
-        content_box = canvas.getbbox() or (0, 0, width, height)
-        overlay = canvas.crop(content_box)
+        overlay = image
         overlay.save(cosmetic_dir / f"{item['id']}.png")
-        item["rect"] = [
-            content_box[0],
-            content_box[1],
-            content_box[2] - content_box[0],
-            content_box[3] - content_box[1],
-        ]
+        # `rect` stays in CANVAS pixels so the catalogue survives a change of
+        # skin (and of crop box).
+        item["rect"] = [int(round(x)), int(round(y)), width_px, height_px]
 
         # Tile icon: the overlay's own content, padded, at most 96 px.
         pad = 6 * scale
@@ -525,11 +531,11 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
 
     stamp = __import__("datetime").datetime.now().isoformat(timespec="seconds")
     catalog = {
-        "version": 2,
+        "version": CATALOG_VERSION,
         "rectSpace": "canvas",
         "stamp": stamp,
         "scale": scale,
-        "size": [width, height],
+        "size": [CANVAS[0] * scale, CANVAS[1] * scale],
         "items": [
             {k: item[k] for k in ("id", "name", "slot", "layer", "rarity", "rect")}
             for item in cosmetics
