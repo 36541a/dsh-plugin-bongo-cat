@@ -88,10 +88,14 @@ COSMETIC_SCALE = 1.0
 # idle frame (head bbox x 62..219, y 33..145). A 128px emote centred there
 # covers the face exactly.
 COSMETIC_FACE_ANCHOR = (141, 100)
+# The emote's own head silhouette is ~120px wide inside its 128 box, while the
+# cat's head is 157 canvas units across — 1.3 makes the two outlines coincide,
+# so the emoji REPLACES the cat's face instead of sitting on top of it.
+COSMETIC_FACE_SCALE = 1.3
 
 # Bumped whenever the geometry above changes, so an existing catalogue is
 # re-exported instead of silently keeping rects from the old formula.
-CATALOG_VERSION = 4
+CATALOG_VERSION = 5
 
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
@@ -516,7 +520,6 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
 
     cosmetic_dir = out / COSMETIC_DIR
     cosmetic_dir.mkdir(parents=True, exist_ok=True)
-    k = COSMETIC_SCALE
     exported = 0
     for item in cosmetics:
         sprite = sprite_objects[item["sprite"]].read()
@@ -526,6 +529,7 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
         # The sprite's own authored box (m_Rect), not a hardcoded 256: the
         # emoji faces are 128x128 and were being shifted by half a box.
         box_w, box_h = sprite.m_Rect.width, sprite.m_Rect.height
+        k = COSMETIC_FACE_SCALE if item["slot"] == "face" else COSMETIC_SCALE
         width_px = max(1, int(round(image.width * scale * k)))
         height_px = max(1, int(round(image.height * scale * k)))
         image = image.resize((width_px, height_px), Image.LANCZOS)
