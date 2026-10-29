@@ -557,6 +557,8 @@ export function apply(ctx: Context) {
     size?: number[]
     /** Crop box of the frames inside the full canvas: [left, top, right, bottom]. */
     box?: number[]
+    /** Frame name → file name with the cat's own face painted out. */
+    faceFrames?: Record<string, string>
     extractedAt?: string
     gameDir?: string
     missing?: string
@@ -572,6 +574,12 @@ export function apply(ctx: Context) {
       size: Array.isArray(meta.size) ? (meta.size as number[]) : undefined,
       box: Array.isArray(meta.box) && meta.box.length === 4 && meta.box.every((value) => typeof value === 'number')
         ? (meta.box as number[])
+        : undefined,
+      faceFrames: meta.faceFrames !== null && typeof meta.faceFrames === 'object'
+        ? Object.fromEntries(
+            Object.entries(meta.faceFrames as Record<string, unknown>)
+              .filter(([, file]) => typeof file === 'string' && /^[a-z-]+-face\.png$/.test(file as string))
+          ) as Record<string, string>
         : undefined,
       extractedAt: typeof meta.extractedAt === 'string' ? meta.extractedAt : undefined,
       gameDir: typeof meta.gameDir === 'string' ? meta.gameDir : undefined

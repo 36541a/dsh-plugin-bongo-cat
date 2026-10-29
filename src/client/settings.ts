@@ -50,14 +50,16 @@ export interface NativeStatus {
   size?: number[]
   /** Crop box of the frames inside the full canvas: [left, top, right, bottom]. */
   box?: number[]
+  /** Frame name → the same frame with the cat's own face painted out. */
+  faceFrames?: Record<string, string>
   extractedAt?: string
   gameDir?: string
   missing?: string
 }
 
-/** Cache-busted URL of an extracted native frame. */
-export function nativeFrameUrl(frame: 'idle' | 'tap-left' | 'tap-right', stamp: string): string {
-  return `/plugins/bongo-cat/native/${frame}.png?v=${encodeURIComponent(stamp)}`
+/** Cache-busted URL of an extracted native frame (or one of its variants). */
+export function nativeFrameUrl(frame: 'idle' | 'tap-left' | 'tap-right', stamp: string, file?: string): string {
+  return `/plugins/bongo-cat/native/${file ?? `${frame}.png`}?v=${encodeURIComponent(stamp)}`
 }
 
 /** Cache-busted URL of a Steam skin icon. */

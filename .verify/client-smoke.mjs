@@ -97,7 +97,10 @@ const connection = {
         return { ok: true, value: { counter: 0 } }
       }
       if (method === 'native/status') {
-        return { ok: true, value: { available: true, skin: 'DefaultBongo', size: [1020, 750], box: [0, 0, 1020, 750], extractedAt: 'test-stamp' } }
+        return { ok: true, value: {
+          available: true, skin: 'DefaultBongo', size: [1020, 750], box: [0, 0, 1020, 750], extractedAt: 'test-stamp',
+          faceFrames: { idle: 'idle-face.png', 'tap-left': 'tap-left-face.png', 'tap-right': 'tap-right-face.png' }
+        } }
       }
       if (method === 'cosmetics/catalog') {
         return { ok: true, value: { stamp: 'test-stamp', rectSpace: 'canvas', size: [1020, 750], items: COSMETICS } }
@@ -316,6 +319,35 @@ check('a wardrobe change re-renders the stickers', decor?.querySelector('[data-s
 const decorBack = el?.querySelector('[data-role="bongo-cat-decor-back"]')
 check('back-layer items render behind the cat', decorBack?.querySelector('[data-item="paper-wings"]') !== null && decor?.querySelector('[data-item="paper-wings"]') === null)
 check('going back to the original fur clears the filter', (nativeLayer?.style.filter ?? '') === '', nativeLayer?.style.filter ?? 'none')
+
+// A face item replaces the cat's own expression: the artwork must swap to the
+// frame with its eyes/mouth painted out, otherwise the emote's features land
+// on top of the cat's and you get two sets of eyes.
+const idleSrc = () => nativeWrap?.querySelector('img[data-frame="idle"]')?.getAttribute('src') ?? ''
+check('without a face item the plain frame is used', idleSrc().includes('/native/idle.png'), idleSrc())
+await payload.store.set({
+  wardrobe: {
+    equipped: { hat: 'top-hat', face: 'blush-sticker', accessory: 'paper-wings' },
+    fur: 'original',
+    owned: { 'acorn-cap': 1, 'rose-scarf': 1, 'blush-sticker': 1, 'top-hat': 1, 'paper-wings': 1 },
+    claimed: 0,
+    filter: 'all'
+  }
+})
+await sleep(20)
+check('a face item swaps in the blanked frame', idleSrc().includes('/native/idle-face.png'), idleSrc())
+check('the expression patch is drawn over it', decor?.querySelector('[data-slot="face"]')?.getAttribute('data-item') === 'blush-sticker')
+await payload.store.set({
+  wardrobe: {
+    equipped: { hat: 'top-hat', face: null, accessory: 'paper-wings' },
+    fur: 'original',
+    owned: { 'acorn-cap': 1, 'rose-scarf': 1, 'blush-sticker': 1, 'top-hat': 1, 'paper-wings': 1 },
+    claimed: 0,
+    filter: 'all'
+  }
+})
+await sleep(20)
+check('removing it restores the original face', idleSrc().includes('/native/idle.png'), idleSrc())
 
 console.log('— click opens settings —')
 

@@ -87,15 +87,17 @@ COSMETIC_SCALE = 1.0
 # anchor is the cat's head centre in this artboard, measured off the composed
 # idle frame (head bbox x 62..219, y 33..145). A 128px emote centred there
 # covers the face exactly.
-COSMETIC_FACE_ANCHOR = (141, 100)
-# The emote's own head silhouette is ~120px wide inside its 128 box, while the
-# cat's head is 157 canvas units across — 1.3 makes the two outlines coincide,
-# so the emoji REPLACES the cat's face instead of sitting on top of it.
-COSMETIC_FACE_SCALE = 1.3
+# Emotes are complete faces, but what the cat needs is only their EXPRESSION.
+# `FaceBaseEmoji` is the neutral face of the same art, so each emote's features
+# are `base features + (emote - base)`, and they are fitted onto the cat's own
+# face: the anchor is the centre of the cat's eyes/mouth bbox, the scale makes
+# the emoji's 128 box cover that bbox.
+COSMETIC_FACE_ANCHOR = (157, 111)
+COSMETIC_FACE_SCALE = 0.85
 
 # Bumped whenever the geometry above changes, so an existing catalogue is
 # re-exported instead of silently keeping rects from the old formula.
-CATALOG_VERSION = 5
+CATALOG_VERSION = 6
 
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
@@ -445,6 +447,94 @@ def load_item_names(assets: Path, script_ids: dict[int, str]) -> dict[str, str]:
     return items
 
 
+
+def _dark_blobs(img: "Image.Image", lo: int = 25, hi: int = 3000) -> list[list[tuple[int, int]]]:
+    """Connected blobs of the dark line art (eyes, mouth, brows)."""
+    W, H = img.size
+    px = img.load()
+    dark = {(x, y) for y in range(H) for x in range(W)
+            if px[x, y][3] > 128 and sum(px[x, y][:3]) < 430}
+    seen: set[tuple[int, int]] = set()
+    blobs: list[list[tuple[int, int]]] = []
+    for point in dark:
+        if point in seen:
+            continue
+        stack, comp = [point], []
+        seen.add(point)
+        while stack:
+            cx, cy = stack.pop()
+            comp.append((cx, cy))
+            for q in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if q in dark and q not in seen:
+                    seen.add(q)
+                    stack.append(q)
+        if lo <= len(comp) <= hi:
+            blobs.append(comp)
+    return blobs
+
+
+def _bbox(points) -> tuple[int, int, int, int]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def blank_face(frame: "Image.Image", box: tuple[int, int, int, int]) -> "Image.Image":
+    """Paint the cat's eyes/mouth out with its own fur colour.
+
+    The face is a flat colour, so a feathered ellipse of the median fur tone
+    blends in and leaves no ghost of the old features — which is what makes the
+    expression overlay read as "same cat, different face".
+    """
+    from PIL import ImageDraw, ImageFilter
+    px = frame.load()
+    cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+    rw, rh = (box[2] - box[0]) // 2 + 14, (box[3] - box[1]) // 2 + 12
+    cols = []
+    for y in range(max(0, cy - rh), min(frame.height, cy + rh)):
+        for x in range(max(0, cx - rw), min(frame.width, cx + rw)):
+            r, g, b, a = px[x, y]
+            if a > 200 and sum((r, g, b)) > 600:
+                cols.append((r, g, b))
+    if not cols:
+        return frame.copy()
+    cols.sort(key=lambda c: sum(c))
+    fur = cols[len(cols) // 2]
+    mask = Image.new("L", frame.size, 0)
+    ImageDraw.Draw(mask).ellipse([cx - rw, cy - rh, cx + rw, cy + rh], fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(6))
+    out = frame.copy()
+    out.paste(Image.new("RGBA", frame.size, fur + (255,)), (0, 0), mask)
+    return out
+
+
+def expression_patch(sprite, base_features: set[tuple[int, int]], base: "Image.Image") -> "Image.Image":
+    """The emote's expression only: the neutral face's features plus whatever
+    this emote changes, with the shared head/ears/outline dropped."""
+    from PIL import ImageChops
+    art = sprite.image.convert("RGBA")
+    W, H = art.size
+    # Emotes are not all the same size: `Face*` faces are 128x128 while the
+    # themed ones (`Nature Fire Emoji` …) come on a different canvas. Compare
+    # against a base resampled to this size so the diff is pixel-aligned.
+    ref = base if base.size == art.size else base.resize(art.size, Image.LANCZOS)
+    diff = ImageChops.difference(art.convert("RGB"), ref.convert("RGB"))
+    ap, dp = art.load(), diff.load()
+    out = Image.new("RGBA", art.size, (0, 0, 0, 0))
+    op = out.load()
+    sx, sy = W / base.width, H / base.height
+    for (bx, by) in base_features:
+        x, y = int(bx * sx), int(by * sy)
+        if 0 <= x < W and 0 <= y < H:
+            op[x, y] = ap[x, y]
+    for y in range(14, max(15, H - 8)):
+        for x in range(12, max(13, W - 12)):
+            r, g, b = dp[x, y]
+            if max(r, g, b) > 60 and ap[x, y][3] > 80:
+                op[x, y] = ap[x, y]
+    return out
+
+
 def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -> dict:
     """Export every dress-up overlay as PNG + write native/cosmetics/catalog.json.
 
@@ -520,27 +610,42 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
 
     cosmetic_dir = out / COSMETIC_DIR
     cosmetic_dir.mkdir(parents=True, exist_ok=True)
+    base_sprite = sprite_objects.get("FaceBaseEmoji")
+    base_img = base_sprite.read().image.convert("RGBA") if base_sprite is not None else None
+    base_features: set[tuple[int, int]] = set()
+    if base_img is not None:
+        blobs = sorted(_dark_blobs(base_img, 25, 8000), key=len, reverse=True)[1:]  # drop the outline
+        base_features = set(p for blob in blobs for p in blob)
+
     exported = 0
     for item in cosmetics:
         sprite = sprite_objects[item["sprite"]].read()
-        image = sprite.image.convert("RGBA")
-        rect = sprite.m_RD.textureRect
-        rx, ry, rw, rh = rect.x, rect.y, rect.width, rect.height
-        # The sprite's own authored box (m_Rect), not a hardcoded 256: the
-        # emoji faces are 128x128 and were being shifted by half a box.
-        box_w, box_h = sprite.m_Rect.width, sprite.m_Rect.height
-        k = COSMETIC_FACE_SCALE if item["slot"] == "face" else COSMETIC_SCALE
-        width_px = max(1, int(round(image.width * scale * k)))
-        height_px = max(1, int(round(image.height * scale * k)))
-        image = image.resize((width_px, height_px), Image.LANCZOS)
-        # Box centre on the anchor, then the art's own offset inside the box
-        # (textureRect is y-up, the canvas is y-down). No intermediate canvas:
-        # a tall hat legitimately sits above the artboard, and compositing
-        # through one would clip it.
-        anchor = COSMETIC_FACE_ANCHOR if item["slot"] == "face" else COSMETIC_ANCHOR
-        x = (anchor[0] - box_w / 2 * k + rx * k) * scale
-        y = (anchor[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
-        overlay = image
+        if item["slot"] == "face" and base_img is not None:
+            # Emotes contribute their EXPRESSION, not their head: the patch is
+            # the neutral face's features plus whatever this emote changes.
+            patch = expression_patch(sprite, base_features, base_img)
+            k = COSMETIC_FACE_SCALE
+            width_px = max(1, int(round(patch.width * scale * k)))
+            height_px = max(1, int(round(patch.height * scale * k)))
+            overlay = patch.resize((width_px, height_px), Image.LANCZOS)
+            # The emote's box centre sits on the cat's face centre.
+            x = (COSMETIC_FACE_ANCHOR[0] - patch.width / 2 * k) * scale
+            y = (COSMETIC_FACE_ANCHOR[1] - patch.height / 2 * k) * scale
+        else:
+            image = sprite.image.convert("RGBA")
+            rect = sprite.m_RD.textureRect
+            rx, ry, rw, rh = rect.x, rect.y, rect.width, rect.height
+            # The sprite's own authored box (m_Rect), not a hardcoded 256.
+            box_w, box_h = sprite.m_Rect.width, sprite.m_Rect.height
+            k = COSMETIC_SCALE
+            width_px = max(1, int(round(image.width * scale * k)))
+            height_px = max(1, int(round(image.height * scale * k)))
+            overlay = image.resize((width_px, height_px), Image.LANCZOS)
+            # Box centre on the anchor, then the art's own offset inside the box
+            # (textureRect is y-up, the canvas is y-down). No intermediate
+            # canvas: a tall hat legitimately sits above the artboard.
+            x = (COSMETIC_ANCHOR[0] - box_w / 2 * k + rx * k) * scale
+            y = (COSMETIC_ANCHOR[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
         overlay.save(cosmetic_dir / f"{item['id']}.png")
         # `rect` stays in CANVAS pixels so the catalogue survives a change of
         # skin (and of crop box).
@@ -636,8 +741,18 @@ def main() -> None:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    face_frames: dict[str, str] = {}
+    face_box = None
+    cat_blobs = _dark_blobs(frames["idle"])
+    if cat_blobs:
+        face_box = _bbox([p for blob in cat_blobs for p in blob])
     for name, image in frames.items():
         image.save(out / f"{name}.png")
+        # A second copy with the cat's own eyes/mouth painted out: the browser
+        # swaps to it while a face item is worn.
+        if face_box is not None:
+            blank_face(image, face_box).save(out / f"{name}-face.png")
+            face_frames[name] = f"{name}-face.png"
 
     # Dress-up overlays ride along on their own canvas-space coordinates: the
     # catalogue is exported once and reused across skins, so a skin switch only
@@ -656,6 +771,7 @@ def main() -> None:
         # Where the cropped frame sits inside the full canvas. The browser needs
         # it to map the canvas-space cosmetic rects onto the stage.
         "box": [int(v) for v in box],
+        "faceFrames": face_frames,
         "cosmetics": {
             "count": len(cosmetic_catalog["items"]),
             "stamp": cosmetic_catalog["stamp"],

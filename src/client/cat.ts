@@ -326,10 +326,14 @@ export function attachBongoCat(ctx: ClientContext, store: BongoCatStore, rpc: Cl
   const applyNativeSources = (): void => {
     if (!nativeStatus.available) return
     const stamp = nativeStamp || nativeStatus.extractedAt || '1'
+    // A face item replaces the cat's expression: the artwork switches to the
+    // frame with its own eyes/mouth painted out, and the emote's features are
+    // drawn on top.
+    const blanked = settings !== null && settings.wardrobe.equipped.face !== null
     for (const frame of NATIVE_FRAMES) {
       const img = nativeImgs[frame]
       if (!img) continue
-      const url = nativeFrameUrl(frame, stamp)
+      const url = nativeFrameUrl(frame, stamp, blanked ? nativeStatus.faceFrames?.[frame] : undefined)
       if (img.getAttribute('src') !== url) img.src = url
     }
   }
