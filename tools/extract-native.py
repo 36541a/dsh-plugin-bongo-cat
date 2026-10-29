@@ -93,11 +93,11 @@ COSMETIC_SCALE = 1.0
 # face: the anchor is the centre of the cat's eyes/mouth bbox, the scale makes
 # the emoji's 128 box cover that bbox.
 COSMETIC_FACE_ANCHOR = (157, 111)
-COSMETIC_FACE_SCALE = 0.85
+COSMETIC_FACE_SCALE = 0.75
 
 # Bumped whenever the geometry above changes, so an existing catalogue is
 # re-exported instead of silently keeping rects from the old formula.
-CATALOG_VERSION = 6
+CATALOG_VERSION = 7
 
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
@@ -366,9 +366,17 @@ def classify_cosmetic(name: str, item_slot: str) -> tuple[str, str, int]:
     Name keywords only decide *where on the body* a hat sits.
     """
     lower = name.lower()
-    if item_slot == "emote":
-        # The only items the game does NOT draw on the hat node.
+    if item_slot == "emote" and lower.startswith("face"):
+        # `Face*` emotes are complete cat faces — the only items the game does
+        # NOT draw on the hat node. They become the cat's expression.
         slot, layer = "face", "front"
+    elif item_slot == "emote":
+        # Flags, food, hearts, symbols: they are tagged `emote` but they are not
+        # faces, and there is no expression to lift out of them (their artwork
+        # is mostly white, which a diff against the white face drops entirely —
+        # the rice ball came out as a floating square of seaweed). The game
+        # hangs the whole sticker on the head node, so they stay a prop.
+        slot, layer = "accessory", "front"
     elif BACK_RE.search(name):
         slot, layer = "back", "back"
     elif HAT_RE.search(name):
@@ -479,20 +487,68 @@ def _bbox(points) -> tuple[int, int, int, int]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def blank_face(frame: "Image.Image", box: tuple[int, int, int, int]) -> "Image.Image":
+def _outline_points(img: "Image.Image") -> set[tuple[int, int]]:
+    """The face contour: the dark blob with the largest extent.
+
+    It wraps the whole head, so it wins on bounding-box area even when another
+    shape (sunglasses, a hat brim) is heavier.
+    """
+    W, H = img.size
+    px = img.load()
+    dark = {(x, y) for y in range(H) for x in range(W)
+            if px[x, y][3] > 128 and sum(px[x, y][:3]) < 430}
+    seen: set[tuple[int, int]] = set()
+    best: set[tuple[int, int]] = set()
+    best_area = -1
+    for point in dark:
+        if point in seen:
+            continue
+        stack, comp = [point], []
+        seen.add(point)
+        while stack:
+            cx, cy = stack.pop()
+            comp.append((cx, cy))
+            for q in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if q in dark and q not in seen:
+                    seen.add(q)
+                    stack.append(q)
+        xs = [p[0] for p in comp]
+        ys = [p[1] for p in comp]
+        area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+        if area > best_area:
+            best_area, best = area, set(comp)
+    return best
+
+
+def _near_mask(points: set[tuple[int, int]], size: tuple[int, int], radius: int) -> "Image.Image":
+    """L mask, 255 within `radius` px of any point in `points`."""
+    from PIL import ImageFilter
+    mask = Image.new("L", size, 0)
+    mp = mask.load()
+    for (x, y) in points:
+        if 0 <= x < size[0] and 0 <= y < size[1]:
+            mp[x, y] = 255
+    return mask.filter(ImageFilter.MaxFilter(radius * 2 + 1))
+
+
+def blank_face(frame: "Image.Image", features: set[tuple[int, int]]) -> "Image.Image":
     """Paint the cat's eyes/mouth out with its own fur colour.
 
-    The face is a flat colour, so a feathered ellipse of the median fur tone
-    blends in and leaves no ghost of the old features — which is what makes the
-    expression overlay read as "same cat, different face".
+    The mask is built from the features themselves, dilated and then feathered.
+    An ellipse fitted to their bounding box looks right but is smaller than the
+    box at the corners, so the feather ran straight through the eye and mouth
+    corners and left grey ghosts of them on the blanked frame.
     """
-    from PIL import ImageDraw, ImageFilter
+    from PIL import ImageFilter, ImageChops
+    if not features:
+        return frame.copy()
+    xs = [p[0] for p in features]
+    ys = [p[1] for p in features]
+    x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
     px = frame.load()
-    cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
-    rw, rh = (box[2] - box[0]) // 2 + 14, (box[3] - box[1]) // 2 + 12
     cols = []
-    for y in range(max(0, cy - rh), min(frame.height, cy + rh)):
-        for x in range(max(0, cx - rw), min(frame.width, cx + rw)):
+    for y in range(max(0, y0 - 18), min(frame.height, y1 + 18)):
+        for x in range(max(0, x0 - 18), min(frame.width, x1 + 18)):
             r, g, b, a = px[x, y]
             if a > 200 and sum((r, g, b)) > 600:
                 cols.append((r, g, b))
@@ -500,15 +556,75 @@ def blank_face(frame: "Image.Image", box: tuple[int, int, int, int]) -> "Image.I
         return frame.copy()
     cols.sort(key=lambda c: sum(c))
     fur = cols[len(cols) // 2]
+
     mask = Image.new("L", frame.size, 0)
-    ImageDraw.Draw(mask).ellipse([cx - rw, cy - rh, cx + rw, cy + rh], fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(6))
+    mp = mask.load()
+    for (x, y) in features:
+        mp[x, y] = 255
+    # Dilate well past the features, then feather: the soft edge lands on flat
+    # fur (invisible) instead of on the feature itself (a grey ghost).
+    mask = mask.filter(ImageFilter.MaxFilter(25)).filter(ImageFilter.GaussianBlur(5))
+
+    # Never bite into the head outline: it is the one dark thing the face
+    # touches, and a chipped contour looks worse than a soft edge.
+    ring = Image.new("L", frame.size, 0)
+    rp = ring.load()
+    for y in range(max(0, y0 - 30), min(frame.height, y1 + 30)):
+        for x in range(max(0, x0 - 30), min(frame.width, x1 + 30)):
+            if (x, y) in features:
+                continue
+            r, g, b, a = px[x, y]
+            if a > 128 and r + g + b < 430:
+                rp[x, y] = 255
+    mask = ImageChops.subtract(mask, ring.filter(ImageFilter.MaxFilter(7)))
+
     out = frame.copy()
     out.paste(Image.new("RGBA", frame.size, fur + (255,)), (0, 0), mask)
     return out
 
 
-def expression_patch(sprite, base_features: set[tuple[int, int]], base: "Image.Image") -> "Image.Image":
+def _drop_small_fragments(img: "Image.Image", near: "Image.Image", max_px: int = 250, ratio: float = 0.4) -> "Image.Image":
+    """Erase small blobs that sit on the shared face outline.
+
+    Each emote is drawn with a slightly different contour, so the diff against
+    the neutral face picks up slivers of the outline near the edge. They are
+    not part of the expression and, once pasted, land outside the cat's face as
+    stray marks.
+    """
+    W, H = img.size
+    px = img.load()
+    np_ = near.load()
+    pts = {(x, y) for y in range(H) for x in range(W) if px[x, y][3] > 20}
+    seen: set[tuple[int, int]] = set()
+    drop: list[tuple[int, int]] = []
+    for point in pts:
+        if point in seen:
+            continue
+        stack, comp = [point], []
+        seen.add(point)
+        while stack:
+            cx, cy = stack.pop()
+            comp.append((cx, cy))
+            for q in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if q in pts and q not in seen:
+                    seen.add(q)
+                    stack.append(q)
+        if len(comp) <= max_px:
+            inside = sum(1 for (x, y) in comp if np_[x, y] > 0)
+            if inside >= len(comp) * ratio:
+                drop.extend(comp)
+    if not drop:
+        return img
+    out = img.copy()
+    op = out.load()
+    for (x, y) in drop:
+        op[x, y] = (0, 0, 0, 0)
+    return out
+
+
+def expression_patch(sprite, base_features: set[tuple[int, int]], base: "Image.Image",
+                     ring_near: "Image.Image | None" = None,
+                     ring_rgb: tuple[int, int, int] | None = None) -> "Image.Image":
     """The emote's expression only: the neutral face's features plus whatever
     this emote changes, with the shared head/ears/outline dropped."""
     from PIL import ImageChops
@@ -520,6 +636,8 @@ def expression_patch(sprite, base_features: set[tuple[int, int]], base: "Image.I
     ref = base if base.size == art.size else base.resize(art.size, Image.LANCZOS)
     diff = ImageChops.difference(art.convert("RGB"), ref.convert("RGB"))
     ap, dp = art.load(), diff.load()
+    rp_ref = ref.load()
+    rn = ring_near.load() if ring_near is not None else None
     out = Image.new("RGBA", art.size, (0, 0, 0, 0))
     op = out.load()
     sx, sy = W / base.width, H / base.height
@@ -527,11 +645,34 @@ def expression_patch(sprite, base_features: set[tuple[int, int]], base: "Image.I
         x, y = int(bx * sx), int(by * sy)
         if 0 <= x < W and 0 <= y < H:
             op[x, y] = ap[x, y]
-    for y in range(14, max(15, H - 8)):
-        for x in range(12, max(13, W - 12)):
+    # Full canvas: the fixed 12/14 px inset used to clip marks that sit near
+    # the edge of the emote's box (the heart that floats between the ears came
+    # out as half a heart). The outline is excluded by colour below instead.
+    for y in range(H):
+        for x in range(W):
+            if ap[x, y][3] <= 80:
+                continue
             r, g, b = dp[x, y]
-            if max(r, g, b) > 60 and ap[x, y][3] > 80:
-                op[x, y] = ap[x, y]
+            peak = max(r, g, b)
+            cr, cg, cb = ap[x, y][:3]
+            # A flat threshold misses marks that only differ in INTENSITY: the
+            # blush is (255,166,166) over the neutral face's own (250,223,221),
+            # a peak difference of 57, so only its anti-aliased rim survived and
+            # the cheeks came out as crescents. A mark also ADDS saturation,
+            # which is the test used here — the face's own pink gradient is
+            # just as saturated as the neutral face's, so it stays out.
+            sat = max(cr, cg, cb) - min(cr, cg, cb)
+            if not (peak > 60 or (peak > 24 and sat > 55)):
+                continue
+            # Slivers of the shared head outline differ from the neutral face by
+            # a few levels; drop them, but keep genuinely black art (sunglasses)
+            # that happens to sit near the contour.
+            if rn is not None and ring_rgb is not None and rn[x, y] > 0:
+                if abs(cr - ring_rgb[0]) < 45 and abs(cg - ring_rgb[1]) < 45 and abs(cb - ring_rgb[2]) < 45:
+                    continue
+            op[x, y] = ap[x, y]
+    if ring_near is not None:
+        out = _drop_small_fragments(out, ring_near)
     return out
 
 
@@ -613,9 +754,22 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
     base_sprite = sprite_objects.get("FaceBaseEmoji")
     base_img = base_sprite.read().image.convert("RGBA") if base_sprite is not None else None
     base_features: set[tuple[int, int]] = set()
+    ring_near = None
+    base_cx = base_cy = None
     if base_img is not None:
-        blobs = sorted(_dark_blobs(base_img, 25, 8000), key=len, reverse=True)[1:]  # drop the outline
-        base_features = set(p for blob in blobs for p in blob)
+        outline = _outline_points(base_img)
+        base_features = set(p for blob in _dark_blobs(base_img, 25, 8000) for p in blob
+                            if p not in outline)
+        ring_near = _near_mask(outline, base_img.size, 10)
+        ring_rgb = None
+        if outline:
+            samples = [base_img.getpixel(p)[:3] for p in list(outline)[:600]]
+            ring_rgb = tuple(int(sum(c[i] for c in samples) / len(samples)) for i in range(3))
+        if base_features:
+            xs = [p[0] for p in base_features]
+            ys = [p[1] for p in base_features]
+            base_cx = (min(xs) + max(xs)) / 2
+            base_cy = (min(ys) + max(ys)) / 2
 
     exported = 0
     for item in cosmetics:
@@ -623,14 +777,18 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
         if item["slot"] == "face" and base_img is not None:
             # Emotes contribute their EXPRESSION, not their head: the patch is
             # the neutral face's features plus whatever this emote changes.
-            patch = expression_patch(sprite, base_features, base_img)
+            patch = expression_patch(sprite, base_features, base_img, ring_near, ring_rgb)
             k = COSMETIC_FACE_SCALE
             width_px = max(1, int(round(patch.width * scale * k)))
             height_px = max(1, int(round(patch.height * scale * k)))
             overlay = patch.resize((width_px, height_px), Image.LANCZOS)
-            # The emote's box centre sits on the cat's face centre.
-            x = (COSMETIC_FACE_ANCHOR[0] - patch.width / 2 * k) * scale
-            y = (COSMETIC_FACE_ANCHOR[1] - patch.height / 2 * k) * scale
+            # The emote's FEATURES sit on the cat's features. Centring the
+            # 128 box instead put them ~22 canvas px too low: the eyes/mouth
+            # are not centred in their own box.
+            fx = base_cx if base_cx is not None else patch.width / 2
+            fy = base_cy if base_cy is not None else patch.height / 2
+            x = (COSMETIC_FACE_ANCHOR[0] - fx * k) * scale
+            y = (COSMETIC_FACE_ANCHOR[1] - fy * k) * scale
         else:
             image = sprite.image.convert("RGBA")
             rect = sprite.m_RD.textureRect
@@ -742,16 +900,14 @@ def main() -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     face_frames: dict[str, str] = {}
-    face_box = None
     cat_blobs = _dark_blobs(frames["idle"])
-    if cat_blobs:
-        face_box = _bbox([p for blob in cat_blobs for p in blob])
+    face_pixels = set(p for blob in cat_blobs for p in blob)
     for name, image in frames.items():
         image.save(out / f"{name}.png")
         # A second copy with the cat's own eyes/mouth painted out: the browser
         # swaps to it while a face item is worn.
-        if face_box is not None:
-            blank_face(image, face_box).save(out / f"{name}-face.png")
+        if face_pixels:
+            blank_face(image, face_pixels).save(out / f"{name}-face.png")
             face_frames[name] = f"{name}-face.png"
 
     # Dress-up overlays ride along on their own canvas-space coordinates: the
