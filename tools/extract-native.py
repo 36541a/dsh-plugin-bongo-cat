@@ -82,9 +82,16 @@ DRUMS = ("DefaultBongoLeft", "DefaultBongoRight")
 COSMETIC_ANCHOR = (200.6, 2.6)
 COSMETIC_SCALE = 1.0
 
+# Emotes (`itemslot:emote`) are whole cat faces — `FaceBaseEmoji` is a 128x128
+# head that fills its box — and the game has no separate face node, so their
+# anchor is the cat's head centre in this artboard, measured off the composed
+# idle frame (head bbox x 62..219, y 33..145). A 128px emote centred there
+# covers the face exactly.
+COSMETIC_FACE_ANCHOR = (141, 100)
+
 # Bumped whenever the geometry above changes, so an existing catalogue is
 # re-exported instead of silently keeping rects from the old formula.
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 
 # Right tap. Assembly-CSharp's Cat.Tap() calls ShowRightPunch(true), whose only
 # visual change is swapping the right-paw Image's sprite to <Skin>RightPunch
@@ -344,17 +351,26 @@ RARITY_RARE = ("silver", "ruby", "sapphire", "emerald", "amethyst", "crown",
                "ghost", "angel", "demon", "gem")
 
 
-def classify_cosmetic(name: str) -> tuple[str, str, int]:
-    """Return (slot, layer, rarity) for one item name (heuristic, documented)."""
+def classify_cosmetic(name: str, item_slot: str) -> tuple[str, str, int]:
+    """Return (slot, layer, rarity) for one item.
+
+    `item_slot` is the game's own `itemslot` tag, which is the authoritative
+    split: `emote` items are whole cat faces (`FaceBaseEmoji`, `FaceAngryEmoji`
+    …) meant to sit on the head, while `hat` items are worn on the hat node.
+    Name keywords only decide *where on the body* a hat sits.
+    """
     lower = name.lower()
-    if BACK_RE.search(name):
-        slot, layer = "back", "back"
-    elif FACE_RE.search(name):
+    if item_slot == "emote":
+        # The only items the game does NOT draw on the hat node.
         slot, layer = "face", "front"
+    elif BACK_RE.search(name):
+        slot, layer = "back", "back"
     elif HAT_RE.search(name):
         slot, layer = "hat", "front"
     else:
-        # Body props, food, costumes, hand-held objects: one "extras" bucket.
+        # Glasses, body props, food, costumes: everything else the game hangs
+        # on the hat node. Grouping is only the panel's tabs; the anchor is
+        # the hat node for all of them.
         slot, layer = "accessory", "front"
     if any(word in lower for word in RARITY_LEGENDARY):
         rarity = 3
@@ -394,11 +410,16 @@ def _read_len_string(data: bytes, pos: int) -> tuple[str, int]:
     return data[pos + 4:pos + 4 + length].decode("utf-8", "ignore"), pos + 4 + length
 
 
-def load_item_names(assets: Path, script_ids: dict[int, str]) -> list[str]:
-    """Display names of the game's local item definitions (Steam items)."""
+def load_item_names(assets: Path, script_ids: dict[int, str]) -> dict[str, str]:
+    """Item display name → the game's own `itemslot` tag (hat / emote / skin …).
+
+    The tag lives in the item's serialized tag list ("itemslot:hat"), which is
+    the only authoritative slot information on this machine — the Steam
+    inventory API is what normally supplies it.
+    """
     target = {pid for pid, name in script_ids.items() if name == "SteamItemBasic"}
     env = UnityPy.load(str(assets))
-    names: list[str] = []
+    items: dict[str, str] = {}
     for obj in env.objects:
         if obj.type.name != "MonoBehaviour":
             continue
@@ -415,8 +436,9 @@ def load_item_names(assets: Path, script_ids: dict[int, str]) -> list[str]:
             name, _ = _read_len_string(data, 28)
         except Exception:
             continue
-        names.append(name)
-    return sorted(set(names))
+        match = re.search(rb"itemslot:([a-z]+)", data)
+        items[name] = match.group(1).decode("ascii") if match else ""
+    return items
 
 
 def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -> dict:
@@ -461,7 +483,7 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
 
     cosmetics: list[dict] = []
     used: set[str] = set()
-    for raw in raw_names:
+    for raw in sorted(raw_names):
         match = re.match(r"^(\d+)\s*-\s*(.+)$", raw)
         if match is None:
             continue
@@ -474,7 +496,7 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
         # the canvas is a dress-up overlay.
         if f"{key}Left" in sprite_objects:
             continue
-        slot, layer, rarity = classify_cosmetic(name)
+        slot, layer, rarity = classify_cosmetic(name, raw_names[raw])
         base = slugify(name)
         slug = base
         suffix = 2
@@ -511,8 +533,9 @@ def export_cosmetics(assets: Path, out: Path, scale: int, force: bool = False) -
         # (textureRect is y-up, the canvas is y-down). No intermediate canvas:
         # a tall hat legitimately sits above the artboard, and compositing
         # through one would clip it.
-        x = (COSMETIC_ANCHOR[0] - box_w / 2 * k + rx * k) * scale
-        y = (COSMETIC_ANCHOR[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
+        anchor = COSMETIC_FACE_ANCHOR if item["slot"] == "face" else COSMETIC_ANCHOR
+        x = (anchor[0] - box_w / 2 * k + rx * k) * scale
+        y = (anchor[1] - box_h / 2 * k + (box_h - ry - rh) * k) * scale
         overlay = image
         overlay.save(cosmetic_dir / f"{item['id']}.png")
         # `rect` stays in CANVAS pixels so the catalogue survives a change of
